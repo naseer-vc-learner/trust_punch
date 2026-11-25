@@ -1,0 +1,30 @@
+rules_version = '2';
+
+// TrustPunch Storage rules.
+//
+// Selfies are uploaded by the Cloud Function (Admin SDK), never by the client:
+// the client sends the image bytes inside the callable payload so the server
+// is the only thing that decides what gets persisted and under which record.
+// Clients get read access to their own audit selfies; enrollment frames are
+// write-nothing/read-nothing because they are deleted after embedding.
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isAdmin() {
+      return request.auth != null && request.auth.token.admin == true;
+    }
+
+    match /attendance_selfies/{employeeId}/{fileName} {
+      allow read:  if isAdmin() || (request.auth != null && request.auth.uid == employeeId);
+      allow write: if false;
+    }
+
+    match /enrollment/{employeeId}/{fileName} {
+      allow read, write: if false;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

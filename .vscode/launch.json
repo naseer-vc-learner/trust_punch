@@ -1,0 +1,47 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Use this one for day-to-day work.
+      //
+      // The IDE Run button passes no --dart-define, which is why a plain run
+      // fails at startup: the app falls back to real Firebase and the
+      // placeholder credentials in firebase_options.dart are rejected.
+      "name": "TrustPunch (local emulators)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "args": [
+        "--dart-define=USE_EMULATOR=true",
+        "--dart-define=EMULATOR_HOST=${input:emulatorHost}"
+      ]
+    },
+    {
+      // Android emulator (not a physical phone) reaches the host machine
+      // through the 10.0.2.2 alias, so no IP is needed.
+      "name": "TrustPunch (local emulators, Android emulator)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "args": ["--dart-define=USE_EMULATOR=true"]
+    },
+    {
+      // Only works once `flutterfire configure` has written real credentials.
+      "name": "TrustPunch (real Firebase project)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart"
+    }
+  ],
+  "inputs": [
+    {
+      // Prompted on every launch because a Mac's LAN address changes with the
+      // network, and a stale value fails the same way a missing one does.
+      // Find yours with: ipconfig getifaddr en0
+      "id": "emulatorHost",
+      "type": "promptString",
+      "description": "Your Mac's LAN IP (ipconfig getifaddr en0)",
+      "default": "10.215.223.112"
+    }
+  ]
+}

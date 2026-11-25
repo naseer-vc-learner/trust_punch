@@ -1,0 +1,30 @@
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "ignore": ["node_modules", ".git", "firebase-debug.log", "*.local"],
+      "predeploy": ["npm --prefix \"$RESOURCE_DIR\" run build"]
+    }
+  ],
+  "emulators": {
+    "_host_comment": "0.0.0.0 binds to every interface, not just loopback. Without it a physical phone on the same Wi-Fi cannot reach these ports — the emulators would only answer to the host machine itself.",
+    "auth": { "port": 9099, "host": "0.0.0.0" },
+    "functions": { "port": 5001, "host": "0.0.0.0" },
+    "firestore": { "port": 8080, "host": "0.0.0.0" },
+    "storage": { "port": 9199, "host": "0.0.0.0" },
+    "ui": { "enabled": true, "port": 4000, "host": "0.0.0.0" },
+    "singleProjectMode": true,
+    "pubsub": {
+      "port": 8085,
+      "_comment": "Required for the scheduled functions (planPresencePings, dispatchPresencePings, flagAnomalies) to load. Without it the emulator skips them entirely. They still do not fire on their own schedule locally — trigger them by hand, see README."
+    }
+  }
+}

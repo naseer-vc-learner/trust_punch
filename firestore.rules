@@ -1,0 +1,122 @@
+rules_version = '2';
+
+// TrustPunch Firestore Security Rules
+//
+// Core principle: the client CAPTURES signals, it never DECIDES attendance.
+// Every write that affects the trust chain (attendance, devices, employees)
+// is denied here and can only be performed by the Firebase Admin SDK running
+// inside a Cloud Function, which bypasses these rules.
+//
+// Admin identity comes from a custom auth claim (`request.auth.token.admin`),
+// set by the `setAdminClaim` Cloud Function. It is deliberately NOT read from
+// a Firestore document, so an attacker who finds any employees-write hole
+// still cannot escalate to admin.
+//
+// NOTE: App Check enforcement is configured per-service in the Firebase console
+// (Firestore / Functions / Storage -> App Check -> Enforce). Rules cannot see
+// App Check tokens; the callable functions additionally reject requests with
+// no App Check token (see functions/src/lib/guards.ts).
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // `request.auth.token.admin` ERRORS when the claim is absent — rules throw
+    // on undefined property access rather than returning null, which aborts
+    // rule evaluation entirely and denies the request. `.get()` with a default
+    // is the only form that is safe for a claim most users do not carry.
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.get('admin', false) == true;
+    }
+
+    // The employeeId IS the Firebase Auth uid. Enrollment binds them 1:1 in
+    // the `enrollEmployee` Cloud Function, so this comparison is sufficient.
+    function isSelf(employeeId) {
+      return isSignedIn() && request.auth.uid == employeeId;
+    }
+
+    // ---------------------------------------------------------------- employees
+    // Employees read their own profile. Only Cloud Functions / admins write:
+    // registeredDeviceId and faceEmbeddingRef are trust anchors, so a client
+    // that could edit them could re-point verification at its own device/face.
+    match /employees/{employeeId} {
+      allow get:    if isSelf(employeeId) || isAdmin();
+      allow list:   if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    // ---------------------------------------------------------------- sites
+    // Readable by any signed-in employee (the app shows distance-to-site).
+    // Writes are admin-only and go through the admin console / Cloud Function.
+    match /sites/{siteId} {
+      allow read:   if isSignedIn();
+      allow write:  if false;
+    }
+
+    // ---------------------------------------------------------------- attendance
+    // READ-ONLY for clients, forever. All writes come from the Admin SDK.
+    match /attendance/{recordId} {
+      // `list` is evaluated per returned document, so scoping on
+      // resource.data is what actually constrains the query: a client asking
+      // for someone else's records has the whole query denied.
+      // (`request.query.where` does not exist in rules — only limit, offset
+      // and orderBy are exposed — so it cannot be used to enforce this.)
+      allow get:    if isAdmin() || (isSignedIn() && resource.data.employeeId == request.auth.uid);
+      allow list:   if isAdmin()
+                    || (isSignedIn()
+                        && request.query.limit <= 100
+                        && resource.data.employeeId == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+
+    // ---------------------------------------------------------------- work_sessions
+    // The open working day: arrival time, breaks, hours worked. Readable by its
+    // owner so the app can show "checked in since 09:14" and offer the right
+    // next action. Writes are Cloud Function only — these are the numbers
+    // someone gets paid from, so a client that could edit them could edit
+    // its own hours.
+    match /work_sessions/{sessionId} {
+      allow get:    if isAdmin() || (isSignedIn() && resource.data.employeeId == request.auth.uid);
+      allow list:   if isAdmin()
+                    || (isSignedIn() && resource.data.employeeId == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+
+    // ---------------------------------------------------------------- devices
+    // Employees can see the trust state of their own devices (so the app can
+    // show "pending admin approval"), but approval itself is server-side only.
+    match /devices/{deviceId} {
+      allow get:    if isAdmin() || (isSignedIn() && resource.data.employeeId == request.auth.uid);
+      allow list:   if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    // ---------------------------------------------------------------- wfh_exceptions
+    // A WFH day disables the geofence, so granting one is a privilege:
+    // employees may read theirs, only the approval Cloud Function may write.
+    match /wfh_exceptions/{exceptionId} {
+      allow get:    if isAdmin() || (isSignedIn() && resource.data.employeeId == request.auth.uid);
+      allow list:   if isAdmin()
+                    || (isSignedIn() && resource.data.employeeId == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+
+    // ---------------------------------------------------------------- presence_pings
+    // Server-generated WFH presence challenges. Employee reads their own so the
+    // app can render the response window; responses go through a callable.
+    match /presence_pings/{pingId} {
+      allow get:    if isAdmin() || (isSignedIn() && resource.data.employeeId == request.auth.uid);
+      allow list:   if isAdmin()
+                    || (isSignedIn() && resource.data.employeeId == request.auth.uid);
+      allow write:  if false;
+    }
+
+    // ---------------------------------------------------------------- default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
