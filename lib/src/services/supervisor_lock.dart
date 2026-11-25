@@ -38,6 +38,17 @@ class SupervisorLock {
 
   final SharedPreferences _prefs;
 
+  /// True while someone who entered the PIN is in the supervisor role, so
+  /// the screens inside it do not ask again. Kept in memory only: a restart
+  /// always starts locked.
+  bool _session = false;
+
+  bool get sessionActive => _session;
+
+  void beginSession() => _session = true;
+
+  void endSession() => _session = false;
+
   bool get hasPin => _prefs.getString(_hashKey) != null;
 
   int get triesLeft => max(0, freeTries - (_prefs.getInt(_failsKey) ?? 0));

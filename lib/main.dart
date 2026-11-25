@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'src/i18n/ui_text.dart';
-import 'src/screens/home_screen.dart';
+import 'src/screens/role_root.dart';
 import 'src/services/face_recognizer.dart';
 import 'src/services/speech_service.dart';
 import 'src/services/supervisor_lock.dart';
@@ -50,7 +50,7 @@ class TrustPunchApp extends StatelessWidget {
               isRtl(store.languageCode) ? TextDirection.rtl : TextDirection.ltr,
           child: child!,
         ),
-        home: HomeScreen(
+        home: RoleRoot(
           store: store,
           lock: lock,
           recognizer: recognizer,

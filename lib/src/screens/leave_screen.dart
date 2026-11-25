@@ -20,17 +20,64 @@ String leaveDatesLabel(LeaveRequest leave) => leave.from == leave.to
     ? _day.format(leave.from)
     : '${_day.format(leave.from)} – ${_day.format(leave.to)}';
 
+/// Asks for leave and files it as pending. Used by the Leave screen and,
+/// without any list, by the gate kiosk.
+///
+/// [fixedWorker] set: the request is for that person only (a worker's own
+/// phone). Null: the person picks who it is for.
+Future<void> requestLeaveFlow(
+  BuildContext context,
+  AttendanceStore store, {
+  Worker? fixedWorker,
+}) async {
+  final lang = store.languageCode;
+  void snack(String message) => ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(message)));
+
+  if (store.workers.isEmpty) {
+    snack(t(lang, T.noWorkers));
+    return;
+  }
+  final draft = await showDialog<_LeaveDraft>(
+    context: context,
+    builder: (_) => _RequestLeaveDialog(store: store, fixedWorker: fixedWorker),
+  );
+  if (draft == null || !context.mounted) return;
+
+  try {
+    await store.requestLeave(
+      worker: draft.worker,
+      type: draft.type,
+      from: draft.dates.start,
+      to: draft.dates.end,
+      reason: draft.reason,
+    );
+    if (context.mounted) snack(t(lang, T.leaveRequested));
+  } on StateError {
+    if (context.mounted) snack(t(lang, T.leaveOverlap));
+  }
+}
+
 /// Leave requests: anyone can ask, only a supervisor decides.
 ///
-/// Opening the screen and filing a request needs no PIN, because on a gate
-/// phone the worker may be the one asking. Approving, rejecting and deleting
-/// do, and the PIN is asked once per visit so a supervisor clearing a queue
-/// is not asked again for every request.
+/// [onlyWorker] set (a worker's own phone): shows and files only that
+/// person's leave. [canDecide] (supervisor role): adds approve, reject and
+/// delete, each still checked against the supervisor PIN — which passes
+/// straight through inside the supervisor's session.
 class LeaveScreen extends StatefulWidget {
-  const LeaveScreen({super.key, required this.store, required this.lock});
+  const LeaveScreen({
+    super.key,
+    required this.store,
+    required this.lock,
+    this.onlyWorker,
+    this.canDecide = false,
+  });
 
   final AttendanceStore store;
   final SupervisorLock lock;
+  final Worker? onlyWorker;
+  final bool canDecide;
 
   @override
   State<LeaveScreen> createState() => _LeaveScreenState();
@@ -41,12 +88,6 @@ class _LeaveScreenState extends State<LeaveScreen> {
 
   String get _lang => widget.store.languageCode;
 
-  void _snack(String message) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
-  }
-
   Future<bool> _ensureSupervisor() async {
     if (_unlocked) return true;
     final ok = await requireSupervisor(context, widget.lock, _lang);
@@ -54,31 +95,11 @@ class _LeaveScreenState extends State<LeaveScreen> {
     return ok;
   }
 
-  Future<void> _request() async {
-    final store = widget.store;
-    if (store.workers.isEmpty) {
-      _snack(t(_lang, T.noWorkers));
-      return;
-    }
-    final draft = await showDialog<_LeaveDraft>(
-      context: context,
-      builder: (_) => _RequestLeaveDialog(store: store),
-    );
-    if (draft == null || !mounted) return;
-
-    try {
-      await store.requestLeave(
-        worker: draft.worker,
-        type: draft.type,
-        from: draft.dates.start,
-        to: draft.dates.end,
-        reason: draft.reason,
+  Future<void> _request() => requestLeaveFlow(
+        context,
+        widget.store,
+        fixedWorker: widget.onlyWorker,
       );
-      if (mounted) _snack(t(_lang, T.leaveRequested));
-    } on StateError {
-      if (mounted) _snack(t(_lang, T.leaveOverlap));
-    }
-  }
 
   Future<void> _decide(LeaveRequest leave, {required bool approve}) async {
     if (!await _ensureSupervisor()) return;
@@ -97,7 +118,10 @@ class _LeaveScreenState extends State<LeaveScreen> {
       body: ListenableBuilder(
         listenable: widget.store,
         builder: (context, _) {
-          final leaves = widget.store.leaves;
+          final only = widget.onlyWorker;
+          final leaves = only == null
+              ? widget.store.leaves
+              : widget.store.leaves.where((l) => l.workerId == only.id).toList();
           // Pending first: that is the queue someone has to act on.
           final sections = [
             for (final status in LeaveStatus.values)
@@ -120,6 +144,7 @@ class _LeaveScreenState extends State<LeaveScreen> {
                               _LeaveCard(
                                 leave: leave,
                                 lang: _lang,
+                                canDecide: widget.canDecide,
                                 onApprove: () => _decide(leave, approve: true),
                                 onReject: () => _decide(leave, approve: false),
                                 onDelete: () => _delete(leave),
@@ -171,6 +196,7 @@ class _LeaveCard extends StatelessWidget {
   const _LeaveCard({
     required this.leave,
     required this.lang,
+    required this.canDecide,
     required this.onApprove,
     required this.onReject,
     required this.onDelete,
@@ -178,6 +204,7 @@ class _LeaveCard extends StatelessWidget {
 
   final LeaveRequest leave;
   final String lang;
+  final bool canDecide;
   final VoidCallback onApprove;
   final VoidCallback onReject;
   final VoidCallback onDelete;
@@ -203,7 +230,7 @@ class _LeaveCard extends StatelessWidget {
                     style: text.titleMedium,
                   ),
                 ),
-                if (!pending)
+                if (canDecide && !pending)
                   IconButton(
                     tooltip: t(lang, T.delete),
                     icon: const Icon(Icons.delete_outline),
@@ -219,7 +246,7 @@ class _LeaveCard extends StatelessWidget {
               const SizedBox(height: 4),
               Text(leave.reason, style: text.bodySmall),
             ],
-            if (pending) ...[
+            if (canDecide && pending) ...[
               const SizedBox(height: 8),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
@@ -255,9 +282,10 @@ class _LeaveDraft {
 }
 
 class _RequestLeaveDialog extends StatefulWidget {
-  const _RequestLeaveDialog({required this.store});
+  const _RequestLeaveDialog({required this.store, this.fixedWorker});
 
   final AttendanceStore store;
+  final Worker? fixedWorker;
 
   @override
   State<_RequestLeaveDialog> createState() => _RequestLeaveDialogState();
@@ -275,11 +303,8 @@ class _RequestLeaveDialogState extends State<_RequestLeaveDialog> {
   @override
   void initState() {
     super.initState();
-    final store = widget.store;
-    // On a personal phone the request is almost always for its owner.
-    _worker = store.mode == AppMode.individual
-        ? store.activeWorker
-        : (store.workers.length == 1 ? store.workers.first : null);
+    final workers = widget.store.workers;
+    _worker = widget.fixedWorker ?? (workers.length == 1 ? workers.first : null);
   }
 
   @override
@@ -330,17 +355,25 @@ class _RequestLeaveDialogState extends State<_RequestLeaveDialog> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          DropdownButtonFormField<String>(
-            initialValue: _worker?.id,
-            decoration: InputDecoration(labelText: t(_lang, T.worker)),
-            items: workers
-                .map((w) => DropdownMenuItem(value: w.id, child: Text(w.name)))
-                .toList(),
-            onChanged: (id) => setState(() {
-              _worker = workers.firstWhere((w) => w.id == id);
-              _error = null;
-            }),
-          ),
+          // A worker's own phone files leave for its owner only.
+          if (widget.fixedWorker != null)
+            InputDecorator(
+              decoration: InputDecoration(labelText: t(_lang, T.worker)),
+              child: Text(widget.fixedWorker!.name),
+            )
+          else
+            DropdownButtonFormField<String>(
+              initialValue: _worker?.id,
+              decoration: InputDecoration(labelText: t(_lang, T.worker)),
+              items: workers
+                  .map((w) =>
+                      DropdownMenuItem(value: w.id, child: Text(w.name)))
+                  .toList(),
+              onChanged: (id) => setState(() {
+                _worker = workers.firstWhere((w) => w.id == id);
+                _error = null;
+              }),
+            ),
           const SizedBox(height: 16),
           Text(t(_lang, T.leaveType),
               style: Theme.of(context).textTheme.labelLarge),
