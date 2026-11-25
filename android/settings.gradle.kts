@@ -23,8 +23,7 @@ plugins {
     id("org.jetbrains.kotlin.android") version "2.3.20" apply false
     // Reads android/app/google-services.json and generates the string
     // resources the native Firebase SDKs auto-initialise from. Without it
-    // the SDK has no API key and throws at the first Firebase call.
-    id("com.google.gms.google-services") version "4.4.2" apply false
+  
 }
 
 include(":app")
