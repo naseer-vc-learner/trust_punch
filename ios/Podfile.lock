@@ -91,6 +91,9 @@ PODS:
     - TensorFlowLiteSwift (= 2.12.0)
     - TensorFlowLiteSwift/CoreML (= 2.12.0)
     - TensorFlowLiteSwift/Metal (= 2.12.0)
+  - video_player_avfoundation (0.0.1):
+    - Flutter
+    - FlutterMacOS
 
 DEPENDENCIES:
   - camera_avfoundation (from `.symlinks/plugins/camera_avfoundation/ios`)
@@ -103,6 +106,7 @@ DEPENDENCIES:
   - safe_device (from `.symlinks/plugins/safe_device/ios`)
   - shared_preferences_foundation (from `.symlinks/plugins/shared_preferences_foundation/darwin`)
   - tflite_flutter (from `.symlinks/plugins/tflite_flutter/ios`)
+  - video_player_avfoundation (from `.symlinks/plugins/video_player_avfoundation/darwin`)
 
 SPEC REPOS:
   trunk:
@@ -142,11 +146,13 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/shared_preferences_foundation/darwin"
   tflite_flutter:
     :path: ".symlinks/plugins/tflite_flutter/ios"
+  video_player_avfoundation:
+    :path: ".symlinks/plugins/video_player_avfoundation/darwin"
 
 SPEC CHECKSUMS:
   camera_avfoundation: 968a9a5323c79a99c166ad9d7866bfd2047b5a9b
   DTTJailbreakDetection: 5e356c5badc17995f65a83ed9483f787a0057b71
-  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  Flutter: 71a624a5bc0c04062bf19101d501e466baf2fb47
   flutter_tts: 35ac3c7d42412733e795ea96ad2d7e05d0a75113
   geolocator_apple: ab36aa0e8b7d7a2d7639b3b4e48308394e8cef5e
   google_mlkit_commons: b4dfe2f6ae4cbf24010dc6640a28984d01343c86
@@ -168,7 +174,8 @@ SPEC CHECKSUMS:
   TensorFlowLiteC: 20785a69299185a379ba9852b6625f00afd7984a
   TensorFlowLiteSwift: 3a4928286e9e35bdd3e17970f48e53c80d25e793
   tflite_flutter: 64b192e11352fe36943ab6656e1d49207f1a5595
+  video_player_avfoundation: a0f7b0f7f7d91c3d33f7a746bc3fbb57a6fae803
 
 PODFILE CHECKSUM: a595e131994950551f39c72fdc15de65a1f14359
 
-COCOAPODS: 1.16.2
+COCOAPODS: 1.17.0

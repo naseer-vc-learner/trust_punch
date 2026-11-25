@@ -9,10 +9,15 @@ enrollment and check-in cannot run there.
 
 ## Run it
 
+**Use `fvm`.** This project pins Flutter 3.47.9 in `.fvmrc` (needed by
+`a2ui_flutter`); the global `flutter` on PATH is older and will not resolve
+the packages.
+
 ```bash
-flutter run -d 00008101-00042D461105001E --debug     # the connected iPhone
-flutter devices                                      # if the id changed
-dart analyze lib                                     # must stay clean
+fvm flutter run -d 00008101-00042D461105001E --debug # the connected iPhone
+fvm flutter devices                                  # if the id changed
+fvm dart analyze lib test                            # must stay clean
+fvm flutter test
 ```
 
 **Only ever have one `flutter run` alive.** Two sessions fight over the device
@@ -50,7 +55,12 @@ lib/
       shared_widgets.dart        runPunch(), WorkerCard, ClockCard, VoiceBar, formatHours
                                  + verify, enroll, workers, sites, calendar, leave,
                                  supervisor_pin (PIN dialogs)
-test/                            lock, shift flags, leave, roles (`flutter test`)
+    genui/                       supervisor "Ask" (generative UI via A2UI)
+      ask_screen.dart            question box, renders answers, allows only "open screen"
+      ask_engine.dart            AskEngine interface + ScriptedAskEngine (offline demo)
+      insight_data.dart          the only data an answer may see (no faces/GPS/reasons)
+      trustpunch_catalog.dart    StatTile, WorkerRow, strict processor (newAskProcessor)
+test/                            lock, shift flags, leave, roles, ask (`fvm flutter test`)
 assets/models/mobilefacenet.tflite   112×112 → 192-dim embedding
 _old_firebase_app/               the previous Firebase version, kept for reference
 ```
@@ -96,6 +106,18 @@ offered a choice (finish vs break).
   Only the supervisor home reaches Workers, Sites, the phone's owner, leave
   decisions and "Delete all attendance". Set on first use; a forgotten PIN
   means reinstalling the app (which wipes all data).
+- **Generative UI is supervisor-only and read-only.** Answers are A2UI
+  messages rendered by `a2ui_flutter` (replaces the discontinued `genui`)
+  from the basic catalog + `trustPunchCatalog`. Always build the processor
+  with `newAskProcessor()`: without a `validationConfig`, `MessageProcessor`
+  lets unknown components through. Answers may only create/update/delete a
+  surface and offer to open `openableScreens`; approving, deleting and
+  punching stay on the normal screens. `a2ui_*` and `json_schema_builder`
+  are pinned exactly — they are weeks old.
+- **No model yet.** `ScriptedAskEngine` answers four question types from the
+  phone's data. A real model goes behind `AskEngine` via your own server
+  (`a2ui_agent` there), never with an API key in the app, and receives only
+  `InsightData`.
 - **The kiosk never lists leave**, only files requests: a gate screen anyone
   can read is no place for other people's sick-leave reasons.
 - **Leave: anyone may request, only the supervisor PIN decides.** The worker

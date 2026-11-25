@@ -93,3 +93,6 @@ firestore-debug.log
 ui-debug.log
 pubsub-debug.log
 database-debug.log
+
+# FVM Version Cache
+.fvm/

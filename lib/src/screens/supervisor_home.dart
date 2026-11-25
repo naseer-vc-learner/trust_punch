@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../genui/ask_screen.dart';
 import '../i18n/ui_text.dart';
 import '../models/attendance.dart';
 import '../services/face_recognizer.dart';
@@ -62,6 +63,15 @@ class SupervisorHome extends StatelessWidget {
             Card(
               child: Column(
                 children: [
+                  ListTile(
+                    leading: const Icon(Icons.auto_awesome),
+                    title: Text(t(lang, T.ask)),
+                    subtitle: Text(t(lang, T.askHint)),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () =>
+                        _open(context, AskScreen(store: store, lock: lock)),
+                  ),
+                  const Divider(height: 1),
                   ListTile(
                     leading: Badge(
                       isLabelVisible: pending > 0,

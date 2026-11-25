@@ -118,6 +118,10 @@ enum T {
   leaveApprovals,
   waitingCount,
   personalPhoneHelp,
+  ask,
+  askHint,
+  askOffline,
+  askCouldNotShow,
 }
 
 /// Machine-written outside English — have a native speaker check before real
@@ -237,6 +241,11 @@ const _ui = <String, Map<T, String>>{
     T.waitingCount: '{n} waiting',
     T.personalPhoneHelp:
         'Used by the "My own phone" role: only this worker\'s face is accepted.',
+    T.ask: 'Ask',
+    T.askHint: 'Ask about attendance…',
+    T.askOffline: 'Demo answers, worked out on this phone. Nothing is sent '
+        'anywhere.',
+    T.askCouldNotShow: 'That answer could not be shown.',
   },
   'hi': {
     T.startWorkBig: 'काम शुरू',
