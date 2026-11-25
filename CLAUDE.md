@@ -42,16 +42,22 @@ lib/
       integrity_service.dart     jailbreak / emulator check
       speech_service.dart        TTS, voice availability, fallback voices
       supervisor_lock.dart       supervisor PIN: salted hash, lockout after 5 tries
-    screens/                     home, verify, enroll, workers, sites, calendar,
-                                 leave, supervisor_pin (PIN dialogs)
-test/                            supervisor lock, shift flags, leave (`flutter test`)
+    screens/
+      role_root.dart             role picker + which home to show; supervisor idle lock
+      worker_home.dart           "My own phone" (1:1): next-action button, my calendar/leave
+      kiosk_home.dart            "Gate phone" (1:N): scan face, request leave, today's list
+      supervisor_home.dart       on-site board, leave approvals, calendar, workers, sites
+      shared_widgets.dart        runPunch(), WorkerCard, ClockCard, VoiceBar, formatHours
+                                 + verify, enroll, workers, sites, calendar, leave,
+                                 supervisor_pin (PIN dialogs)
+test/                            lock, shift flags, leave, roles (`flutter test`)
 assets/models/mobilefacenet.tflite   112×112 → 192-dim embedding
 _old_firebase_app/               the previous Firebase version, kept for reference
 ```
 
 ## How a punch works
 
-`home → VerifyScreen` proves four things in order, and refuses at the first
+`runPunch()` (worker or kiosk home) → `VerifyScreen` proves four things in order, and refuses at the first
 failure: device not jailbroken → GPS fix is real, precise to ±30 m, and
 within 50 m of a known site → liveness challenge passed → face matches
 someone enrolled.
@@ -80,9 +86,18 @@ offered a choice (finish vs break).
 - **`android/build.gradle.kts` pins `tflite_flutter`'s Kotlin to JVM 11.** The
   plugin sets Java 11 but no Kotlin target, so on JDK 25 the build fails with
   "Inconsistent JVM Target Compatibility". Remove only if the plugin fixes it.
-- **Supervisor PIN guards Workers, Sites, the mode switch, the phone's owner
-  and "Delete all attendance".** Set on first use. A forgotten PIN means
-  reinstalling the app (which wipes all data). Scan face is never behind it.
+- **Three roles, picked on a start screen** (demo choice): Worker "My own
+  phone" (1:1 against the owner the supervisor sets), Gate kiosk (1:N), and
+  Supervisor. Worker and kiosk are remembered across restarts; supervisor
+  never is. "Change user" returns to the picker from any home, with no PIN.
+- **Supervisor PIN is entered once, at the picker**, and opens an in-memory
+  session (`SupervisorLock.beginSession`) so screens inside don't ask again.
+  It ends on "Change user", on restart, or after 2 min in the background.
+  Only the supervisor home reaches Workers, Sites, the phone's owner, leave
+  decisions and "Delete all attendance". Set on first use; a forgotten PIN
+  means reinstalling the app (which wipes all data).
+- **The kiosk never lists leave**, only files requests: a gate screen anyone
+  can read is no place for other people's sick-leave reasons.
 - **Leave: anyone may request, only the supervisor PIN decides.** The worker
   may be the one asking at a gate phone. Approve / reject / delete ask for the
   PIN once per visit to the Leave screen. Only *approved* leave marks a worker

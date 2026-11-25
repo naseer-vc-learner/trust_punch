@@ -7,12 +7,14 @@ import '../services/supervisor_lock.dart';
 /// Asks for the supervisor PIN before a protected screen or action.
 ///
 /// The first time, there is no PIN yet, so this asks the supervisor to set
-/// one instead. Returns true only when the action may go ahead.
+/// one instead. Inside an open supervisor session it passes straight
+/// through. Returns true only when the action may go ahead.
 Future<bool> requireSupervisor(
   BuildContext context,
   SupervisorLock lock,
   String lang,
 ) async {
+  if (lock.sessionActive) return true;
   if (!lock.hasPin) {
     final pin = await _askNewPin(context, lang, t(lang, T.setSupervisorPin));
     if (pin == null) return false;

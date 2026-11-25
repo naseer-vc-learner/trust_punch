@@ -13,12 +13,13 @@ const standardDay = Duration(hours: 8);
 const shiftStartHour = 9;
 const lateGrace = Duration(minutes: 10);
 
-/// Who this phone is for.
+/// Who is using the phone, and so which home screen they get.
 ///
-/// Individual: one person's own phone, so the app confirms that one face.
-/// Team: a phone kept at the gate, so the app works out which of several
-/// enrolled people has walked up.
-enum AppMode { individual, team }
+/// Worker: one person's own phone; the app confirms that one face (1:1).
+/// Kiosk: a phone kept at the gate for a team; the app works out which of
+/// several enrolled people has walked up (1:N).
+/// Supervisor: manages workers, sites, leave and attendance, behind the PIN.
+enum AppRole { worker, kiosk, supervisor }
 
 /// Everything the app knows, kept on the device only — no backend, no network.
 class AttendanceStore extends ChangeNotifier {
@@ -29,7 +30,7 @@ class AttendanceStore extends ChangeNotifier {
     this._workers,
     this._leaves,
     this._languageCode,
-    this._mode,
+    this._lastRole,
     this._activeWorkerId,
   );
 
@@ -38,7 +39,7 @@ class AttendanceStore extends ChangeNotifier {
   static const _workersKey = 'workers';
   static const _leavesKey = 'leaves';
   static const _languageKey = 'language';
-  static const _modeKey = 'mode';
+  static const _roleKey = 'role';
   static const _activeWorkerKey = 'activeWorker';
 
   final SharedPreferences _prefs;
@@ -47,7 +48,7 @@ class AttendanceStore extends ChangeNotifier {
   final List<Worker> _workers;
   final List<LeaveRequest> _leaves;
   String _languageCode;
-  AppMode _mode;
+  AppRole? _lastRole;
   String? _activeWorkerId;
 
   static Future<AttendanceStore> load() async {
@@ -77,29 +78,44 @@ class AttendanceStore extends ChangeNotifier {
       workers,
       leaves,
       prefs.getString(_languageKey) ?? 'en',
-      AppMode.values.byName(prefs.getString(_modeKey) ?? AppMode.team.name),
+      _parseRole(prefs.getString(_roleKey)),
       prefs.getString(_activeWorkerKey),
     );
   }
 
+  /// Only worker and kiosk are ever restored, so reopening the app can never
+  /// land in the supervisor screens without the PIN.
+  static AppRole? _parseRole(String? name) => switch (name) {
+        'worker' => AppRole.worker,
+        'kiosk' => AppRole.kiosk,
+        _ => null,
+      };
+
   List<Site> get sites => List.unmodifiable(_sites);
   List<Worker> get workers => List.unmodifiable(_workers);
   String get languageCode => _languageCode;
-  AppMode get mode => _mode;
 
-  /// In individual mode, the one person this phone belongs to.
+  /// The role the phone reopens in; null means show the role picker.
+  AppRole? get lastRole => _lastRole;
+
+  Future<void> setLastRole(AppRole? role) async {
+    _lastRole = role == AppRole.supervisor ? null : role;
+    final saved = _lastRole;
+    if (saved == null) {
+      await _prefs.remove(_roleKey);
+    } else {
+      await _prefs.setString(_roleKey, saved.name);
+    }
+    notifyListeners();
+  }
+
+  /// The one person a personal (worker-role) phone belongs to.
   Worker? get activeWorker {
     if (_workers.isEmpty) return null;
     for (final worker in _workers) {
       if (worker.id == _activeWorkerId) return worker;
     }
     return _workers.first;
-  }
-
-  Future<void> setMode(AppMode mode) async {
-    _mode = mode;
-    await _prefs.setString(_modeKey, mode.name);
-    notifyListeners();
   }
 
   Future<void> setActiveWorker(String id) async {
@@ -249,17 +265,26 @@ class AttendanceStore extends ChangeNotifier {
 
   // ------------------------------------------------------------- whole day
 
-  List<Punch> punchesOn(DateTime day) =>
-      _punches.where((p) => _isSameDay(p.at, day)).toList(growable: false);
+  // Passing [workerId] narrows any of these to that one person, which is how
+  // a worker's own calendar shows only their own days.
 
-  /// Day-of-month to hours worked across everyone, for the calendar grid.
-  Map<int, Duration> monthTotals(int year, int month) {
+  List<Punch> punchesOn(DateTime day, {String? workerId}) => _punches
+      .where((p) =>
+          _isSameDay(p.at, day) && (workerId == null || p.workerId == workerId))
+      .toList(growable: false);
+
+  /// Day-of-month to hours worked, for the calendar grid.
+  Map<int, Duration> monthTotals(int year, int month, {String? workerId}) {
+    final people = workerId == null
+        ? _workers
+        : _workers.where((w) => w.id == workerId);
     final result = <int, Duration>{};
     for (final punch in _punches) {
       if (punch.at.year != year || punch.at.month != month) continue;
+      if (workerId != null && punch.workerId != workerId) continue;
       result.putIfAbsent(punch.at.day, () {
         var total = Duration.zero;
-        for (final worker in _workers) {
+        for (final worker in people) {
           total += workedOn(worker.id, punch.at);
         }
         return total;
@@ -268,8 +293,10 @@ class AttendanceStore extends ChangeNotifier {
     return result;
   }
 
-  Duration monthTotal(int year, int month) =>
-      monthTotals(year, month).values.fold(Duration.zero, (sum, d) => sum + d);
+  Duration monthTotal(int year, int month, {String? workerId}) =>
+      monthTotals(year, month, workerId: workerId)
+          .values
+          .fold(Duration.zero, (sum, d) => sum + d);
 
   // ------------------------------------------------------------------ writes
 
@@ -338,20 +365,29 @@ class AttendanceStore extends ChangeNotifier {
     return null;
   }
 
-  /// Everyone on approved leave that [day].
-  List<LeaveRequest> leavesOn(DateTime day) => _leaves
-      .where((l) => l.status == LeaveStatus.approved && l.covers(day))
+  /// Everyone (or just [workerId]) on approved leave that [day].
+  List<LeaveRequest> leavesOn(DateTime day, {String? workerId}) => _leaves
+      .where((l) =>
+          l.status == LeaveStatus.approved &&
+          l.covers(day) &&
+          (workerId == null || l.workerId == workerId))
       .toList(growable: false);
 
-  /// Day-of-month numbers in which anyone is on approved leave.
-  Set<int> leaveDaysIn(int year, int month) {
+  /// Day-of-month numbers with approved leave, for anyone or [workerId].
+  Set<int> leaveDaysIn(int year, int month, {String? workerId}) {
     final result = <int>{};
     final daysInMonth = DateTime(year, month + 1, 0).day;
     for (var d = 1; d <= daysInMonth; d++) {
-      if (leavesOn(DateTime(year, month, d)).isNotEmpty) result.add(d);
+      if (leavesOn(DateTime(year, month, d), workerId: workerId).isNotEmpty) {
+        result.add(d);
+      }
     }
     return result;
   }
+
+  /// Requests still waiting for a supervisor.
+  int get pendingLeaveCount =>
+      _leaves.where((l) => l.status == LeaveStatus.pending).length;
 
   /// Whether [workerId] already has pending or approved leave sharing a day
   /// with [from]–[to]. Rejected requests do not block a new one.

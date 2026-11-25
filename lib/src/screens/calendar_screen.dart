@@ -5,16 +5,27 @@ import '../i18n/ui_text.dart';
 import '../models/attendance.dart';
 import '../services/supervisor_lock.dart';
 import '../store/attendance_store.dart';
-import 'home_screen.dart' show formatBySite;
 import 'leave_screen.dart' show leaveTypeLabel;
+import 'shared_widgets.dart' show formatBySite, formatHours;
 import 'supervisor_pin.dart';
 
 /// Monthly attendance: which days were worked, how long, and where.
+///
+/// [onlyWorker] set (a worker's own phone): only that person's days, hours
+/// and leave. [canDelete] (supervisor role): adds "Delete all attendance".
 class CalendarScreen extends StatefulWidget {
-  const CalendarScreen({super.key, required this.store, required this.lock});
+  const CalendarScreen({
+    super.key,
+    required this.store,
+    required this.lock,
+    this.onlyWorker,
+    this.canDelete = false,
+  });
 
   final AttendanceStore store;
   final SupervisorLock lock;
+  final Worker? onlyWorker;
+  final bool canDelete;
 
   @override
   State<CalendarScreen> createState() => _CalendarScreenState();
@@ -80,21 +91,26 @@ class _CalendarScreenState extends State<CalendarScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(t(widget.store.languageCode, T.attendance)),
+        title: Text(widget.onlyWorker == null
+            ? t(widget.store.languageCode, T.attendance)
+            : t(widget.store.languageCode, T.myAttendance)),
         actions: [
-          IconButton(
-            tooltip: t(widget.store.languageCode, T.clearAttendance),
-            icon: const Icon(Icons.delete_sweep_outlined),
-            onPressed: _clearAll,
-          ),
+          if (widget.canDelete)
+            IconButton(
+              tooltip: t(widget.store.languageCode, T.clearAttendance),
+              icon: const Icon(Icons.delete_sweep_outlined),
+              onPressed: _clearAll,
+            ),
         ],
       ),
       body: ListenableBuilder(
         listenable: widget.store,
         builder: (context, _) {
-          final totals = widget.store.monthTotals(_month.year, _month.month);
-          final monthTotal =
-              widget.store.monthTotal(_month.year, _month.month);
+          final who = widget.onlyWorker?.id;
+          final totals = widget.store
+              .monthTotals(_month.year, _month.month, workerId: who);
+          final monthTotal = widget.store
+              .monthTotal(_month.year, _month.month, workerId: who);
 
           return ListView(
             padding: const EdgeInsets.all(16),
@@ -116,8 +132,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
               _MonthGrid(
                 month: _month,
                 totals: totals,
-                leaveDays:
-                    widget.store.leaveDaysIn(_month.year, _month.month),
+                leaveDays: widget.store
+                    .leaveDaysIn(_month.year, _month.month, workerId: who),
                 selected: _selected,
                 onSelect: (day) => setState(() => _selected = day),
               ),
@@ -136,8 +152,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
   }
 
   List<Widget> _buildDayDetail() {
-    final punches = widget.store.punchesOn(_selected);
-    final onLeave = widget.store.leavesOn(_selected);
+    final only = widget.onlyWorker;
+    final punches = widget.store.punchesOn(_selected, workerId: only?.id);
+    final onLeave = widget.store.leavesOn(_selected, workerId: only?.id);
+    final people = only == null ? widget.store.workers : [only];
     if (punches.isEmpty && onLeave.isEmpty) {
       return [
         Padding(
@@ -162,7 +180,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
           ),
         ),
       ),
-      ...widget.store.workers.map((worker) {
+      ...people.map((worker) {
         final worked = widget.store.workedOn(worker.id, _selected);
         if (worked == Duration.zero &&
             widget.store.punchesFor(worker.id, _selected).isEmpty) {
@@ -228,9 +246,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
     ];
   }
 }
-
-String formatHours(Duration d) =>
-    '${d.inHours}h ${d.inMinutes.remainder(60).toString().padLeft(2, '0')}m';
 
 class _MonthHeader extends StatelessWidget {
   const _MonthHeader({
