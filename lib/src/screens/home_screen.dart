@@ -11,6 +11,7 @@ import '../services/speech_service.dart';
 import '../services/supervisor_lock.dart';
 import '../store/attendance_store.dart';
 import 'calendar_screen.dart';
+import 'leave_screen.dart';
 import 'sites_screen.dart';
 import 'supervisor_pin.dart';
 import 'verify_screen.dart';
@@ -160,6 +161,16 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           IconButton(
+            tooltip: 'Leave',
+            icon: const Icon(Icons.event_busy),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) =>
+                    LeaveScreen(store: widget.store, lock: widget.lock),
+              ),
+            ),
+          ),
+          IconButton(
             tooltip: 'Sites',
             icon: const Icon(Icons.business),
             onPressed: () => _openProtected(
@@ -212,6 +223,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       worked: store.workedOn(worker.id, today),
                       onBreakFor: store.breakOn(worker.id, today),
                       bySite: store.workedBySiteOn(worker.id, today),
+                      onLeave: store.leaveOn(worker.id, today) != null,
                       flags: store.flagsFor(worker.id, today),
                       lang: _lang,
                     )),
@@ -428,6 +440,7 @@ class _WorkerCard extends StatelessWidget {
     required this.worked,
     required this.onBreakFor,
     required this.bySite,
+    required this.onLeave,
     required this.flags,
     required this.lang,
   });
@@ -437,6 +450,7 @@ class _WorkerCard extends StatelessWidget {
   final Duration worked;
   final Duration onBreakFor;
   final Map<String, Duration> bySite;
+  final bool onLeave;
   final ShiftFlags flags;
   final String lang;
 
@@ -519,7 +533,19 @@ class _WorkerCard extends StatelessWidget {
             Wrap(
               spacing: 6,
               children: [
-                Chip(label: Text(label), visualDensity: VisualDensity.compact),
+                // "Not working" says nothing new beside "On leave"; but a
+                // worker on leave who clocked in anyway keeps both chips.
+                if (!(onLeave && status == WorkerStatus.off))
+                  Chip(
+                    label: Text(label),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                if (onLeave)
+                  Chip(
+                    avatar: const Icon(Icons.event_busy, size: 18),
+                    label: Text(t(lang, T.onLeave)),
+                    visualDensity: VisualDensity.compact,
+                  ),
                 if (flags.late)
                   Chip(
                     label: Text(t(lang, T.lateFlag)),

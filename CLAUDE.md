@@ -30,6 +30,7 @@ lib/
   main.dart                      app root; rebuilds on language change, applies RTL
   src/
     models/attendance.dart       Worker, Site, Punch, WorkerStatus, cosineSimilarity
+    models/leave.dart            LeaveRequest (annual/sick/unpaid; pending/approved/rejected)
     store/attendance_store.dart  all state + persistence + hours/break/flag maths
     i18n/phrases.dart            spoken lines + language list
     i18n/ui_text.dart            on-screen text (enum T), isRtl()
@@ -42,8 +43,8 @@ lib/
       speech_service.dart        TTS, voice availability, fallback voices
       supervisor_lock.dart       supervisor PIN: salted hash, lockout after 5 tries
     screens/                     home, verify, enroll, workers, sites, calendar,
-                                 supervisor_pin (PIN dialogs)
-test/                            supervisor lock + shift flags (`flutter test`)
+                                 leave, supervisor_pin (PIN dialogs)
+test/                            supervisor lock, shift flags, leave (`flutter test`)
 assets/models/mobilefacenet.tflite   112×112 → 192-dim embedding
 _old_firebase_app/               the previous Firebase version, kept for reference
 ```
@@ -82,6 +83,11 @@ offered a choice (finish vs break).
 - **Supervisor PIN guards Workers, Sites, the mode switch, the phone's owner
   and "Delete all attendance".** Set on first use. A forgotten PIN means
   reinstalling the app (which wipes all data). Scan face is never behind it.
+- **Leave: anyone may request, only the supervisor PIN decides.** The worker
+  may be the one asking at a gate phone. Approve / reject / delete ask for the
+  PIN once per visit to the Leave screen. Only *approved* leave marks a worker
+  away; a worker can't hold two pending/approved requests sharing a day, and a
+  decided request can't be re-decided.
 - **Work and break never overlap.** Break time is excluded from worked hours,
   not contained in it.
 - **A session left open on a past day stops accruing.** Only today keeps
@@ -112,6 +118,10 @@ offered a choice (finish vs break).
   falls back to English. Worker-facing text is in all six languages.
 - **The PIN lock stops casual misuse, not a rooted phone**: the hash and all
   other data sit in plain `shared_preferences`.
+- **Leave is a record, not a policy**: no balances or entitlements, days are
+  calendar days (weekends included), and approved leave does not stop a
+  check-in (both chips show). The Leave screen is English-only; only the
+  "On leave" chip is in all six languages.
 - **GPS accuracy limit is 30 m** (`maxFixAccuracyMeters`), also applied when
   saving a site. It may refuse honest check-ins indoors; tune with real sites.
 

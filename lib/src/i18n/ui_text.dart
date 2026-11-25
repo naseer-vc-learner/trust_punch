@@ -66,6 +66,7 @@ enum T {
   thisPhoneBelongsTo,
   shortFlag,
   weakLocation,
+  onLeave,
   // Supervisor-only screens. English for now: t() falls back to English for
   // any language that has no entry yet.
   setSupervisorPin,
@@ -83,6 +84,27 @@ enum T {
   delete,
   attendanceCleared,
   unlock,
+  // Leave screen, English-only like the other supervisor screens.
+  leave,
+  requestLeave,
+  worker,
+  leaveType,
+  annualLeave,
+  sickLeave,
+  unpaidLeave,
+  pickDates,
+  reason,
+  leavePending,
+  leaveApproved,
+  leaveRejected,
+  approve,
+  reject,
+  noLeaveYet,
+  leaveOverlap,
+  leaveDays,
+  leaveRequested,
+  submit,
+  chooseWorker,
 }
 
 /// Machine-written outside English — have a native speaker check before real
@@ -151,6 +173,7 @@ const _ui = <String, Map<T, String>>{
     T.thisPhoneBelongsTo: 'This phone belongs to',
     T.shortFlag: 'Short day',
     T.weakLocation: 'Location not precise enough',
+    T.onLeave: 'On leave',
     T.setSupervisorPin: 'Set a supervisor PIN',
     T.enterSupervisorPin: 'Supervisor PIN',
     T.newPin: 'New PIN',
@@ -168,6 +191,26 @@ const _ui = <String, Map<T, String>>{
     T.delete: 'Delete',
     T.attendanceCleared: 'Attendance deleted',
     T.unlock: 'Unlock',
+    T.leave: 'Leave',
+    T.requestLeave: 'Request leave',
+    T.worker: 'Worker',
+    T.leaveType: 'Type',
+    T.annualLeave: 'Annual',
+    T.sickLeave: 'Sick',
+    T.unpaidLeave: 'Unpaid',
+    T.pickDates: 'Choose dates',
+    T.reason: 'Reason (optional)',
+    T.leavePending: 'Waiting for approval',
+    T.leaveApproved: 'Approved',
+    T.leaveRejected: 'Rejected',
+    T.approve: 'Approve',
+    T.reject: 'Reject',
+    T.noLeaveYet: 'No leave requests yet',
+    T.leaveOverlap: 'This worker already has leave on some of these days',
+    T.leaveDays: '{n} days',
+    T.leaveRequested: 'Leave requested — waiting for approval',
+    T.submit: 'Send request',
+    T.chooseWorker: 'Choose a worker',
   },
   'hi': {
     T.startWorkBig: 'काम शुरू',
@@ -232,6 +275,7 @@ const _ui = <String, Map<T, String>>{
     T.thisPhoneBelongsTo: 'यह फोन किसका है',
     T.shortFlag: 'कम घंटे',
     T.weakLocation: 'जगह ठीक से पता नहीं चली',
+    T.onLeave: 'छुट्टी पर',
   },
   'ml': {
     T.startWorkBig: 'ജോലി തുടങ്ങുക',
@@ -296,6 +340,7 @@ const _ui = <String, Map<T, String>>{
     T.thisPhoneBelongsTo: 'ഈ ഫോൺ ആരുടേതാണ്',
     T.shortFlag: 'കുറഞ്ഞ സമയം',
     T.weakLocation: 'സ്ഥലം കൃത്യമല്ല',
+    T.onLeave: 'അവധിയിൽ',
   },
   'ta': {
     T.startWorkBig: 'வேலை தொடங்கு',
@@ -360,6 +405,7 @@ const _ui = <String, Map<T, String>>{
     T.thisPhoneBelongsTo: 'இந்த ஃபோன் யாருடையது',
     T.shortFlag: 'குறைந்த நேரம்',
     T.weakLocation: 'இடம் துல்லியமாக இல்லை',
+    T.onLeave: 'விடுப்பில்',
   },
   'ur': {
     T.startWorkBig: 'کام شروع',
@@ -424,6 +470,7 @@ const _ui = <String, Map<T, String>>{
     T.thisPhoneBelongsTo: 'یہ فون کس کا ہے',
     T.shortFlag: 'کم گھنٹے',
     T.weakLocation: 'جگہ ٹھیک سے معلوم نہیں ہوئی',
+    T.onLeave: 'چھٹی پر',
   },
   'bn': {
     T.startWorkBig: 'কাজ শুরু',
@@ -488,6 +535,7 @@ const _ui = <String, Map<T, String>>{
     T.thisPhoneBelongsTo: 'এই ফোন কার',
     T.shortFlag: 'কম সময়',
     T.weakLocation: 'জায়গা সঠিকভাবে বোঝা যায়নি',
+    T.onLeave: 'ছুটিতে',
   },
 };
 

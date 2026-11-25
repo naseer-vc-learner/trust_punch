@@ -6,6 +6,7 @@ import '../models/attendance.dart';
 import '../services/supervisor_lock.dart';
 import '../store/attendance_store.dart';
 import 'home_screen.dart' show formatBySite;
+import 'leave_screen.dart' show leaveTypeLabel;
 import 'supervisor_pin.dart';
 
 /// Monthly attendance: which days were worked, how long, and where.
@@ -115,6 +116,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
               _MonthGrid(
                 month: _month,
                 totals: totals,
+                leaveDays:
+                    widget.store.leaveDaysIn(_month.year, _month.month),
                 selected: _selected,
                 onSelect: (day) => setState(() => _selected = day),
               ),
@@ -134,7 +137,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
   List<Widget> _buildDayDetail() {
     final punches = widget.store.punchesOn(_selected);
-    if (punches.isEmpty) {
+    final onLeave = widget.store.leavesOn(_selected);
+    if (punches.isEmpty && onLeave.isEmpty) {
       return [
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 24),
@@ -146,6 +150,18 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
     final lang = widget.store.languageCode;
     return [
+      ...onLeave.map(
+        (leave) => Card(
+          color: Theme.of(context).colorScheme.tertiaryContainer,
+          child: ListTile(
+            leading: const Icon(Icons.event_busy),
+            title: Text(leave.workerName),
+            subtitle: Text(
+              '${t(lang, T.onLeave)} · ${leaveTypeLabel(lang, leave.type)}',
+            ),
+          ),
+        ),
+      ),
       ...widget.store.workers.map((worker) {
         final worked = widget.store.workedOn(worker.id, _selected);
         if (worked == Duration.zero &&
@@ -313,12 +329,16 @@ class _MonthGrid extends StatelessWidget {
   const _MonthGrid({
     required this.month,
     required this.totals,
+    required this.leaveDays,
     required this.selected,
     required this.onSelect,
   });
 
   final DateTime month;
   final Map<int, Duration> totals;
+
+  /// Days on which someone is on approved leave, marked with a dot.
+  final Set<int> leaveDays;
   final DateTime selected;
   final ValueChanged<DateTime> onSelect;
 
@@ -387,6 +407,16 @@ class _MonthGrid extends StatelessWidget {
                       color: isSelected
                           ? scheme.onPrimary
                           : scheme.onPrimaryContainer,
+                    ),
+                  ),
+                if (leaveDays.contains(dayNumber))
+                  Container(
+                    width: 6,
+                    height: 6,
+                    margin: const EdgeInsets.only(top: 2),
+                    decoration: BoxDecoration(
+                      color: isSelected ? scheme.onPrimary : scheme.tertiary,
+                      shape: BoxShape.circle,
                     ),
                   ),
               ],
