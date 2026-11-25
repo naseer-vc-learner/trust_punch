@@ -64,8 +64,11 @@ offered a choice (finish vs break).
 - **No Firebase.** It was removed deliberately; App Check could not work
   against a placeholder project and its failures were corrupting auth headers.
   The old code is in `_old_firebase_app/` if you need to look.
-- **This is not a git repo.** Nothing is recoverable. Move files aside rather
-  than deleting them.
+- **Git repo, remote is public on GitHub** (`origin` →
+  `naseer-vc-learner/trust_punch`). Check what a commit adds before pushing;
+  `.gitignore` covers build output, secrets, signing files and office docs.
+  `_old_firebase_app/` predates git, so still move files aside rather than
+  deleting them when unsure.
 - **SPM is disabled** (`flutter config --no-enable-swift-package-manager`).
   ML Kit is CocoaPods-only, and the hybrid SPM+CocoaPods setup produced
   missing-XCFramework build failures. If those return:
