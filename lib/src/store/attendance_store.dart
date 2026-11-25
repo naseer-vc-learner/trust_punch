@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/attendance.dart';
+import '../models/leave.dart';
 
 /// Standard day. Anything past this is overtime.
 const standardDay = Duration(hours: 8);
@@ -26,6 +27,7 @@ class AttendanceStore extends ChangeNotifier {
     this._punches,
     this._sites,
     this._workers,
+    this._leaves,
     this._languageCode,
     this._mode,
     this._activeWorkerId,
@@ -34,6 +36,7 @@ class AttendanceStore extends ChangeNotifier {
   static const _punchesKey = 'punches';
   static const _sitesKey = 'sites';
   static const _workersKey = 'workers';
+  static const _leavesKey = 'leaves';
   static const _languageKey = 'language';
   static const _modeKey = 'mode';
   static const _activeWorkerKey = 'activeWorker';
@@ -42,6 +45,7 @@ class AttendanceStore extends ChangeNotifier {
   final List<Punch> _punches;
   final List<Site> _sites;
   final List<Worker> _workers;
+  final List<LeaveRequest> _leaves;
   String _languageCode;
   AppMode _mode;
   String? _activeWorkerId;
@@ -61,11 +65,17 @@ class AttendanceStore extends ChangeNotifier {
         .map((e) => Worker.fromJson(jsonDecode(e) as Map<String, dynamic>))
         .toList();
 
+    final leaves = (prefs.getStringList(_leavesKey) ?? const <String>[])
+        .map((e) =>
+            LeaveRequest.fromJson(jsonDecode(e) as Map<String, dynamic>))
+        .toList();
+
     return AttendanceStore._(
       prefs,
       punches,
       sites,
       workers,
+      leaves,
       prefs.getString(_languageKey) ?? 'en',
       AppMode.values.byName(prefs.getString(_modeKey) ?? AppMode.team.name),
       prefs.getString(_activeWorkerKey),
@@ -304,6 +314,108 @@ class AttendanceStore extends ChangeNotifier {
     await _prefs.setStringList(
       _sitesKey,
       _sites.map((s) => jsonEncode(s.toJson())).toList(),
+    );
+    notifyListeners();
+  }
+
+  // ------------------------------------------------------------------- leave
+
+  /// Every request, newest start date first.
+  List<LeaveRequest> get leaves => List.unmodifiable(
+        [..._leaves]..sort((a, b) => b.from.compareTo(a.from)),
+      );
+
+  /// The approved leave [workerId] is on that [day], if any. Pending and
+  /// rejected requests do not make anyone absent.
+  LeaveRequest? leaveOn(String workerId, DateTime day) {
+    for (final leave in _leaves) {
+      if (leave.workerId == workerId &&
+          leave.status == LeaveStatus.approved &&
+          leave.covers(day)) {
+        return leave;
+      }
+    }
+    return null;
+  }
+
+  /// Everyone on approved leave that [day].
+  List<LeaveRequest> leavesOn(DateTime day) => _leaves
+      .where((l) => l.status == LeaveStatus.approved && l.covers(day))
+      .toList(growable: false);
+
+  /// Day-of-month numbers in which anyone is on approved leave.
+  Set<int> leaveDaysIn(int year, int month) {
+    final result = <int>{};
+    final daysInMonth = DateTime(year, month + 1, 0).day;
+    for (var d = 1; d <= daysInMonth; d++) {
+      if (leavesOn(DateTime(year, month, d)).isNotEmpty) result.add(d);
+    }
+    return result;
+  }
+
+  /// Whether [workerId] already has pending or approved leave sharing a day
+  /// with [from]–[to]. Rejected requests do not block a new one.
+  bool hasOverlappingLeave(String workerId, DateTime from, DateTime to) =>
+      _leaves.any((l) =>
+          l.workerId == workerId &&
+          l.status != LeaveStatus.rejected &&
+          l.overlaps(from, to));
+
+  /// Files a new pending request. Throws [ArgumentError] when the dates are
+  /// backwards and [StateError] when it overlaps leave already asked for —
+  /// the screen checks both first, this is the guard behind it.
+  Future<LeaveRequest> requestLeave({
+    required Worker worker,
+    required LeaveType type,
+    required DateTime from,
+    required DateTime to,
+    required String reason,
+  }) async {
+    final start = dateOnly(from);
+    final end = dateOnly(to);
+    if (end.isBefore(start)) {
+      throw ArgumentError('Leave cannot end before it starts');
+    }
+    if (hasOverlappingLeave(worker.id, start, end)) {
+      throw StateError('${worker.name} already has leave on these days');
+    }
+    final leave = LeaveRequest(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      workerId: worker.id,
+      workerName: worker.name,
+      type: type,
+      from: start,
+      to: end,
+      reason: reason.trim(),
+      status: LeaveStatus.pending,
+      requestedAt: DateTime.now(),
+    );
+    _leaves.add(leave);
+    await _saveLeaves();
+    return leave;
+  }
+
+  /// Approves or rejects a pending request. Already-decided requests are
+  /// left alone, so a stale screen cannot flip a decision.
+  Future<void> decideLeave(String id, {required bool approve}) async {
+    final i = _leaves.indexWhere((l) => l.id == id);
+    if (i < 0 || _leaves[i].status != LeaveStatus.pending) return;
+    _leaves[i] = _leaves[i].decided(
+      approve ? LeaveStatus.approved : LeaveStatus.rejected,
+      DateTime.now(),
+    );
+    await _saveLeaves();
+  }
+
+  Future<void> removeLeave(String id) async {
+    _leaves.removeWhere((l) => l.id == id);
+    await _saveLeaves();
+  }
+
+  Future<void> _saveLeaves() async {
+    await _prefs.setStringList(
+      _leavesKey,
+      _leaves.map((l) => jsonEncode(l.toJson())).toList(),
     );
     notifyListeners();
   }
