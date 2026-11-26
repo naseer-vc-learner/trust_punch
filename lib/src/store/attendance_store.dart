@@ -336,16 +336,32 @@ class AttendanceStore extends ChangeNotifier {
     return total;
   }
 
+  /// Hours worked at each location on [day], keyed by location name for
+  /// display. Two locations with the same name are added together; use
+  /// [workedBySiteIdOn] when they must stay apart.
   Map<String, Duration> workedBySiteOn(String workerId, DateTime day) {
+    final names = <String, String>{
+      for (final p in punchesFor(workerId, day)) p.siteId: p.siteName,
+    };
+    final result = <String, Duration>{};
+    workedBySiteIdOn(workerId, day).forEach((id, hours) {
+      final name = names[id] ?? id;
+      result[name] = (result[name] ?? Duration.zero) + hours;
+    });
+    return result;
+  }
+
+  /// Hours worked at each location on [day], keyed by location id.
+  Map<String, Duration> workedBySiteIdOn(String workerId, DateTime day) {
     final result = <String, Duration>{};
     var state = WorkerStatus.off;
     DateTime? since;
-    String? siteName;
+    String? siteId;
 
     for (final punch in punchesFor(workerId, day)) {
-      if (since != null && state == WorkerStatus.working && siteName != null) {
-        result[siteName] =
-            (result[siteName] ?? Duration.zero) + punch.at.difference(since);
+      if (since != null && state == WorkerStatus.working && siteId != null) {
+        result[siteId] =
+            (result[siteId] ?? Duration.zero) + punch.at.difference(since);
       }
       state = switch (punch.type) {
         PunchType.checkIn || PunchType.breakEnd => WorkerStatus.working,
@@ -353,16 +369,77 @@ class AttendanceStore extends ChangeNotifier {
         PunchType.checkOut => WorkerStatus.off,
       };
       since = punch.at;
-      siteName = punch.siteName;
+      siteId = punch.siteId;
     }
     if (since != null &&
         state == WorkerStatus.working &&
-        siteName != null &&
+        siteId != null &&
         _isSameDay(day, DateTime.now())) {
-      result[siteName] =
-          (result[siteName] ?? Duration.zero) + DateTime.now().difference(since);
+      result[siteId] =
+          (result[siteId] ?? Duration.zero) + DateTime.now().difference(since);
     }
     return result;
+  }
+
+  /// One project's day at a glance: who is at each location right now, the
+  /// hours each location has had today, and what a supervisor should check.
+  ProjectToday projectToday(String projectId, {DateTime? now}) {
+    final at = now ?? DateTime.now();
+    final workers = workersOf(projectId);
+    final working = <String, List<Worker>>{};
+    final onBreak = <String, List<Worker>>{};
+    final hours = <String, Duration>{};
+    final notIn = <Worker>[];
+    final onLeave = <Worker>[];
+    var total = Duration.zero;
+    var travel = Duration.zero;
+    var late = 0;
+    var auto = 0;
+
+    for (final w in workers) {
+      final last = lastPunchFor(w.id);
+      // "Here now" means a session opened today and not closed. One left
+      // open on an earlier day is not someone on site.
+      final openToday = last != null &&
+          last.type != PunchType.checkOut &&
+          _isSameDay(last.at, at);
+      if (openToday) {
+        (last.type == PunchType.breakStart ? onBreak : working)
+            .putIfAbsent(last.siteId, () => [])
+            .add(w);
+      } else if (leaveOn(w.id, at) != null) {
+        onLeave.add(w);
+      } else if (punchesFor(w.id, at).isEmpty) {
+        notIn.add(w);
+      }
+
+      workedBySiteIdOn(w.id, at).forEach((siteId, d) {
+        hours[siteId] = (hours[siteId] ?? Duration.zero) + d;
+        total += d;
+      });
+      travel += travelOn(w.id, at);
+      final flags = flagsFor(w.id, at);
+      if (flags.late) late++;
+      if (flags.autoCheckout) auto++;
+    }
+
+    return ProjectToday(
+      locations: [
+        for (final site in sitesOf(projectId))
+          LocationNow(
+            site: site,
+            working: working[site.id] ?? const [],
+            onBreak: onBreak[site.id] ?? const [],
+            hoursToday: hours[site.id] ?? Duration.zero,
+          ),
+      ],
+      notIn: notIn,
+      onLeave: onLeave,
+      totalHours: total,
+      travel: travel,
+      late: late,
+      autoCheckouts: auto,
+    );
   }
 
   /// Time between leaving one location and checking in at another on [day]:
@@ -687,6 +764,49 @@ class AttendanceStore extends ChangeNotifier {
 
   static bool _isSameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
+}
+
+/// One location of a project, right now.
+class LocationNow {
+  const LocationNow({
+    required this.site,
+    required this.working,
+    required this.onBreak,
+    required this.hoursToday,
+  });
+
+  final Site site;
+  final List<Worker> working;
+  final List<Worker> onBreak;
+
+  /// Hours worked here today by anyone, travel and breaks excluded.
+  final Duration hoursToday;
+}
+
+/// A project's day: see [AttendanceStore.projectToday].
+class ProjectToday {
+  const ProjectToday({
+    required this.locations,
+    required this.notIn,
+    required this.onLeave,
+    required this.totalHours,
+    required this.travel,
+    required this.late,
+    required this.autoCheckouts,
+  });
+
+  final List<LocationNow> locations;
+
+  /// On the project, no punch today, not on leave.
+  final List<Worker> notIn;
+  final List<Worker> onLeave;
+  final Duration totalHours;
+  final Duration travel;
+  final int late;
+  final int autoCheckouts;
+
+  int get onSite => locations.fold(
+      0, (sum, l) => sum + l.working.length + l.onBreak.length);
 }
 
 class ShiftFlags {

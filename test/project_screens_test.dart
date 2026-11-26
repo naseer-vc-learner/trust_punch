@@ -92,10 +92,12 @@ void main() {
         recognizer: FaceRecognizer(),
         speech: SpeechService(),
         projectId: project.id,
+        initialTab: 1,
       ),
     ));
 
-    await tester.scrollUntilVisible(find.text('Enter coordinates'), 200);
+    await tester.scrollUntilVisible(find.text('Enter coordinates'), 200,
+        scrollable: find.byWidgetPredicate((w) => w is Scrollable && w.axisDirection == AxisDirection.down).last);
     await tester.tap(find.text('Enter coordinates'));
     await tester.pumpAndSettle();
     await typeAndSave(tester, 'Gate B');
@@ -186,9 +188,11 @@ void main() {
         recognizer: FaceRecognizer(),
         speech: SpeechService(),
         projectId: project.id,
+        initialTab: 1,
       ),
     ));
-    await tester.scrollUntilVisible(find.text('Ravi'), 200);
+    await tester.scrollUntilVisible(find.text('Ravi'), 200,
+        scrollable: find.byWidgetPredicate((w) => w is Scrollable && w.axisDirection == AxisDirection.down).last);
     await tester.tap(find.text('Ravi'));
     await tester.pumpAndSettle();
 

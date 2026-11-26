@@ -133,7 +133,13 @@ class FaceRecognizer {
     // detect against that same baked file to keep one coordinate space.
     final upright = img.bakeOrientation(raw);
     final bakedPath = await _writeTemp(upright);
-    final faces = await detector.processImage(InputImage.fromFilePath(bakedPath));
+    final List<Face> faces;
+    try {
+      faces = await detector.processImage(InputImage.fromFilePath(bakedPath));
+    } finally {
+      // A full-size face photo must not be left behind on disk.
+      await _deleteQuietly(bakedPath);
+    }
     if (faces.isEmpty) return null;
 
     final face = faces.reduce((a, b) =>
@@ -191,6 +197,18 @@ class FaceRecognizer {
       height: math.max(1, bottom - top),
     );
   }
+
+  static Future<void> _deleteQuietly(String path) async {
+    try {
+      await File(path).delete();
+    } on FileSystemException {
+      // Already gone.
+    }
+  }
+
+  /// Deletes a camera photo once it has been used, so full-size face photos
+  /// never pile up in the app's cache (MASVS-STORAGE / PRIVACY).
+  static Future<void> discardPhoto(String path) => _deleteQuietly(path);
 
   Future<String> _writeTemp(img.Image image) async {
     final file = File('${Directory.systemTemp.path}/face_upright.jpg');

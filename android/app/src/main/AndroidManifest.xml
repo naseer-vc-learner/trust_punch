@@ -15,10 +15,17 @@
     <uses-feature android:name="android.hardware.camera.front" android:required="true"/>
     <uses-feature android:name="android.hardware.location.gps" android:required="false"/>
 
+    <!-- No backups: the app keeps face embeddings and punch selfies, which
+         must not be copied to cloud backup or to another device
+         (MASVS-STORAGE). allowBackup covers cloud backup; the extraction
+         rules also cover device-to-device transfer on Android 12+. -->
     <application
         android:label="trust_punch"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules">
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -123,6 +123,7 @@ enum T {
   autoCheckedOut,
   travel,
   autoCheckoutFlag,
+  close,
   // Projects screens, English-only like the other supervisor screens.
   projects,
   newProject,
@@ -147,6 +148,8 @@ enum T {
   longitude,
   coordinatesInvalid,
   coordinatesHelp,
+  hoursToday,
+  nobodyHere,
 }
 
 /// Machine-written outside English — have a native speaker check before real
@@ -270,6 +273,7 @@ const _ui = <String, Map<T, String>>{
     T.autoCheckedOut: '{site}: automatic check-out at',
     T.travel: 'Travel',
     T.autoCheckoutFlag: 'Auto check-out',
+    T.close: 'Close',
     T.projects: 'Projects',
     T.newProject: 'New project',
     T.projectName: 'Project name',
@@ -297,6 +301,8 @@ const _ui = <String, Map<T, String>>{
     T.coordinatesHelp:
         'Paste "lat, long" from a map app. Check the point first: check-in '
             'works only within 50 m of it.',
+    T.hoursToday: 'Hours today',
+    T.nobodyHere: 'Nobody here right now',
   },
   'hi': {
     T.startWorkBig: 'काम शुरू',
@@ -373,6 +379,7 @@ const _ui = <String, Map<T, String>>{
     T.autoCheckedOut: '{site}: स्वचालित चेक-आउट, समय',
     T.travel: 'यात्रा',
     T.autoCheckoutFlag: 'स्वचालित चेक-आउट',
+    T.close: 'बंद करें',
     T.requestLeave: 'छुट्टी माँगें',
   },
   'ml': {
@@ -450,6 +457,7 @@ const _ui = <String, Map<T, String>>{
     T.autoCheckedOut: '{site}: സ്വയം ചെക്ക്-ഔട്ട്, സമയം',
     T.travel: 'യാത്ര',
     T.autoCheckoutFlag: 'സ്വയം ചെക്ക്-ഔട്ട്',
+    T.close: 'അടയ്ക്കുക',
     T.requestLeave: 'അവധി ചോദിക്കുക',
   },
   'ta': {
@@ -527,6 +535,7 @@ const _ui = <String, Map<T, String>>{
     T.autoCheckedOut: '{site}: தானியங்கி வெளியேற்றம், நேரம்',
     T.travel: 'பயணம்',
     T.autoCheckoutFlag: 'தானியங்கி வெளியேற்றம்',
+    T.close: 'மூடு',
     T.requestLeave: 'விடுப்பு கேள்',
   },
   'ur': {
@@ -604,6 +613,7 @@ const _ui = <String, Map<T, String>>{
     T.autoCheckedOut: '{site}: خودکار چیک آؤٹ، وقت',
     T.travel: 'سفر',
     T.autoCheckoutFlag: 'خودکار چیک آؤٹ',
+    T.close: 'بند کریں',
     T.requestLeave: 'چھٹی مانگیں',
   },
   'bn': {
@@ -681,6 +691,7 @@ const _ui = <String, Map<T, String>>{
     T.autoCheckedOut: '{site}: স্বয়ংক্রিয় চেক-আউট, সময়',
     T.travel: 'যাতায়াত',
     T.autoCheckoutFlag: 'স্বয়ংক্রিয় চেক-আউট',
+    T.close: 'বন্ধ করুন',
     T.requestLeave: 'ছুটি চান',
   },
 };

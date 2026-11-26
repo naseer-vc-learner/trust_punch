@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
@@ -9,8 +11,10 @@ import '../services/face_recognizer.dart';
 import '../services/integrity_service.dart';
 import '../services/liveness_detector.dart';
 import '../services/location_service.dart';
+import '../services/punch_photo_store.dart';
 import '../services/speech_service.dart';
 import '../store/attendance_store.dart';
+import 'punch_result_screen.dart';
 
 /// What the caller should record, once everything has been proven.
 class PunchIntent {
@@ -21,6 +25,7 @@ class PunchIntent {
     required this.latitude,
     required this.longitude,
     required this.distanceMeters,
+    this.photo,
   });
 
   final Worker worker;
@@ -29,6 +34,9 @@ class PunchIntent {
   final double latitude;
   final double longitude;
   final double distanceMeters;
+
+  /// Small JPEG of the check-in photo, kept as evidence on the punch.
+  final Uint8List? photo;
 }
 
 enum _Stage { checking, blocked, liveness, matching, choosing }
@@ -70,6 +78,7 @@ class _VerifyScreenState extends State<VerifyScreen> {
   LocationFix? _fix;
   Worker? _worker;
   bool _passed = false;
+  Uint8List? _photo;
 
   String get _lang => widget.store.languageCode;
 
@@ -99,6 +108,7 @@ class _VerifyScreenState extends State<VerifyScreen> {
     setState(() {
       _stage = _Stage.checking;
       _message = '';
+      _photo = null;
     });
     widget.speech.say(Phrase.findingLocation);
 
@@ -189,7 +199,15 @@ class _VerifyScreenState extends State<VerifyScreen> {
 
     try {
       final path = await _camera.capturePhoto();
-      final embedding = await widget.recognizer.embedFromPhoto(path);
+      final List<double>? embedding;
+      try {
+        embedding = await widget.recognizer.embedFromPhoto(path);
+        // Keep only a small copy, as evidence on the punch; the full-size
+        // photo is deleted below whatever happens.
+        _photo = await PunchPhotoStore.thumbnailOf(path);
+      } finally {
+        await FaceRecognizer.discardPhoto(path);
+      }
       if (!mounted) return;
 
       if (embedding == null) {
@@ -240,11 +258,22 @@ class _VerifyScreenState extends State<VerifyScreen> {
       latitude: fix.latitude,
       longitude: fix.longitude,
       distanceMeters: _distance,
+      photo: _photo,
     ));
   }
 
   @override
   Widget build(BuildContext context) {
+    // A refusal fills the screen in red, so nobody walks away thinking it
+    // worked — readable from a distance, and without reading.
+    if (_stage == _Stage.blocked) {
+      return PunchFailureView(
+        message: _message,
+        lang: _lang,
+        onRetry: _run,
+        onClose: () => Navigator.of(context).pop(),
+      );
+    }
     return Scaffold(
       appBar: AppBar(title: Text(t(_lang, T.scanFace))),
       body: switch (_stage) {
@@ -256,13 +285,8 @@ class _VerifyScreenState extends State<VerifyScreen> {
             icon: Icons.face_retouching_natural,
             title: t(_lang, T.matchingFace),
           ),
-        _Stage.blocked => _Centered(
-            icon: Icons.block,
-            title: t(_lang, T.couldNotVerify),
-            detail: _message,
-            retryLabel: t(_lang, T.tryAgain),
-            onRetry: _run,
-          ),
+        // Drawn above, as a full red screen.
+        _Stage.blocked => const SizedBox.shrink(),
         _Stage.liveness => _buildLiveness(),
         _Stage.choosing => _buildChoice(),
       },
@@ -375,20 +399,12 @@ class _ChoiceButton extends StatelessWidget {
   }
 }
 
+/// A progress step: icon, title, spinner. Refusals use [PunchFailureView].
 class _Centered extends StatelessWidget {
-  const _Centered({
-    required this.icon,
-    required this.title,
-    this.detail,
-    this.onRetry,
-    this.retryLabel,
-  });
+  const _Centered({required this.icon, required this.title});
 
   final IconData icon;
   final String title;
-  final String? detail;
-  final VoidCallback? onRetry;
-  final String? retryLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -405,18 +421,8 @@ class _Centered extends StatelessWidget {
               style: Theme.of(context).textTheme.titleLarge,
               textAlign: TextAlign.center,
             ),
-            if (detail != null && detail!.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(detail!, textAlign: TextAlign.center),
-            ],
             const SizedBox(height: 24),
-            if (onRetry == null)
-              const CircularProgressIndicator()
-            else
-              FilledButton(
-                onPressed: onRetry,
-                child: Text(retryLabel ?? 'Try again'),
-              ),
+            const CircularProgressIndicator(),
           ],
         ),
       ),

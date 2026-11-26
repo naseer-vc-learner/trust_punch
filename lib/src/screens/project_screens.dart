@@ -7,7 +7,7 @@ import '../services/face_recognizer.dart';
 import '../services/location_service.dart';
 import '../services/speech_service.dart';
 import '../store/attendance_store.dart';
-import 'shared_widgets.dart' show showSnack;
+import 'shared_widgets.dart' show SecondTicker, formatHours, showSnack;
 import 'workers_screen.dart' show registerWorkerFlow;
 
 /// Supervisor setup, in the order the work happens: create a project, give
@@ -37,18 +37,22 @@ class ProjectsScreen extends StatelessWidget {
     );
     if (name == null || !context.mounted) return;
     final project = await store.addProject(name);
-    if (context.mounted) _open(context, project.id);
+    // A new project has nothing to show today: open it on Setup.
+    if (context.mounted) _open(context, project.id, tab: 1);
   }
 
-  void _open(BuildContext context, String projectId) =>
-      Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => ProjectScreen(
-          store: store,
-          recognizer: recognizer,
-          speech: speech,
-          projectId: projectId,
+  void _open(BuildContext context, String projectId, {int tab = 0}) =>
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ProjectScreen(
+            store: store,
+            recognizer: recognizer,
+            speech: speech,
+            projectId: projectId,
+            initialTab: tab,
+          ),
         ),
-      ));
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -110,12 +114,17 @@ class ProjectScreen extends StatefulWidget {
     required this.recognizer,
     required this.speech,
     required this.projectId,
+    this.initialTab = 0,
   });
 
   final AttendanceStore store;
   final FaceRecognizer recognizer;
   final SpeechService speech;
   final String projectId;
+
+  /// 0 = Today (the dashboard), 1 = Setup. A new, empty project opens on
+  /// Setup, since there is nothing to show yet.
+  final int initialTab;
 
   @override
   State<ProjectScreen> createState() => _ProjectScreenState();
@@ -143,18 +152,25 @@ class _ProjectScreenState extends State<ProjectScreen> {
     if (value == null) return;
     final list = job ? project.jobs : project.roles;
     if (list.contains(value)) return;
-    await _store.updateProject(job
-        ? project.copyWith(jobs: [...project.jobs, value])
-        : project.copyWith(roles: [...project.roles, value]));
+    await _store.updateProject(
+      job
+          ? project.copyWith(jobs: [...project.jobs, value])
+          : project.copyWith(roles: [...project.roles, value]),
+    );
   }
 
   Future<void> _removeListItem(String value, {required bool job}) async {
     final project = _project;
     if (project == null) return;
-    await _store.updateProject(job
-        ? project.copyWith(jobs: project.jobs.where((j) => j != value).toList())
-        : project.copyWith(
-            roles: project.roles.where((r) => r != value).toList()));
+    await _store.updateProject(
+      job
+          ? project.copyWith(
+              jobs: project.jobs.where((j) => j != value).toList(),
+            )
+          : project.copyWith(
+              roles: project.roles.where((r) => r != value).toList(),
+            ),
+    );
   }
 
   // --------------------------------------------------------------- locations
@@ -178,19 +194,23 @@ class _ProjectScreenState extends State<ProjectScreen> {
       final fix = await LocationService().currentFix();
       if (!mounted) return;
       if (!fix.isPrecise) {
-        showSnack(context,
-            '${t(_lang, T.weakLocation)} (±${fix.accuracyMeters.round()} m)');
+        showSnack(
+          context,
+          '${t(_lang, T.weakLocation)} (±${fix.accuracyMeters.round()} m)',
+        );
         return;
       }
-      await _store.addSite(Site(
-        id: DateTime.now().microsecondsSinceEpoch.toString(),
-        name: name,
-        latitude: fix.latitude,
-        longitude: fix.longitude,
-        projectId: widget.projectId,
-        shiftStartMinutes: shift.$1,
-        shiftEndMinutes: shift.$2,
-      ));
+      await _store.addSite(
+        Site(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          name: name,
+          latitude: fix.latitude,
+          longitude: fix.longitude,
+          projectId: widget.projectId,
+          shiftStartMinutes: shift.$1,
+          shiftEndMinutes: shift.$2,
+        ),
+      );
     } catch (e) {
       if (mounted) showSnack(context, '$e');
     } finally {
@@ -214,15 +234,17 @@ class _ProjectScreenState extends State<ProjectScreen> {
     final shift = await askShift(context, lang: _lang);
     if (shift == null || !mounted) return;
 
-    await _store.addSite(Site(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
-      name: name,
-      latitude: point.$1,
-      longitude: point.$2,
-      projectId: widget.projectId,
-      shiftStartMinutes: shift.$1,
-      shiftEndMinutes: shift.$2,
-    ));
+    await _store.addSite(
+      Site(
+        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        name: name,
+        latitude: point.$1,
+        longitude: point.$2,
+        projectId: widget.projectId,
+        shiftStartMinutes: shift.$1,
+        shiftEndMinutes: shift.$2,
+      ),
+    );
   }
 
   Future<void> _editShift(Site site) async {
@@ -239,17 +261,18 @@ class _ProjectScreenState extends State<ProjectScreen> {
   // ----------------------------------------------------------------- workers
 
   Future<void> _registerWorker() => registerWorkerFlow(
-        context,
-        store: _store,
-        recognizer: widget.recognizer,
-        speech: widget.speech,
-        projectId: widget.projectId,
-      );
+    context,
+    store: _store,
+    recognizer: widget.recognizer,
+    speech: widget.speech,
+    projectId: widget.projectId,
+  );
 
   /// Moves a worker from another project onto this one.
   Future<void> _addExisting() async {
-    final others =
-        _store.workers.where((w) => w.projectId != widget.projectId).toList();
+    final others = _store.workers
+        .where((w) => w.projectId != widget.projectId)
+        .toList();
     if (others.isEmpty) {
       showSnack(context, t(_lang, T.noWorkers));
       return;
@@ -313,128 +336,331 @@ class _ProjectScreenState extends State<ProjectScreen> {
         final workers = _store.workersOf(project.id);
         final text = Theme.of(context).textTheme;
 
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(project.name),
-            actions: [
-              IconButton(
-                tooltip: t(_lang, T.delete),
-                icon: const Icon(Icons.delete_outline),
-                onPressed: _deleteProject,
-              ),
-            ],
-          ),
-          body: ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              // 1. Jobs and roles: the lists workers are given from.
-              _Section(title: t(_lang, T.jobs)),
-              _ChipList(
-                items: project.jobs,
-                empty: t(_lang, T.noneYet),
-                onRemove: (j) => _removeListItem(j, job: true),
-                addLabel: t(_lang, T.addJob),
-                onAdd: () => _addListItem(job: true),
-              ),
-              _Section(title: t(_lang, T.roles)),
-              _ChipList(
-                items: project.roles,
-                empty: t(_lang, T.noneYet),
-                onRemove: (r) => _removeListItem(r, job: false),
-                addLabel: t(_lang, T.addRole),
-                onAdd: () => _addListItem(job: false),
-              ),
-
-              // 2. Locations, each with its own shift.
-              _Section(title: t(_lang, T.locations)),
-              if (sites.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Text(t(_lang, T.noLocationsYet), style: text.bodySmall),
+        return DefaultTabController(
+          length: 2,
+          initialIndex: widget.initialTab,
+          child: Scaffold(
+            appBar: AppBar(
+              title: Text(project.name),
+              actions: [
+                IconButton(
+                  tooltip: t(_lang, T.delete),
+                  icon: const Icon(Icons.delete_outline),
+                  onPressed: _deleteProject,
                 ),
-              for (final site in sites)
-                Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.place_outlined),
-                    title: Text(site.name),
-                    subtitle: Text(
-                      '${t(_lang, T.shift)} '
-                      '${formatShiftTime(site.shiftStartMinutes)}–'
-                      '${formatShiftTime(site.shiftEndMinutes)}\n'
-                      '${site.latitude.toStringAsFixed(5)}, '
-                      '${site.longitude.toStringAsFixed(5)}',
-                    ),
-                    isThreeLine: true,
-                    onTap: () => _editShift(site),
-                    trailing: IconButton(
-                      tooltip: t(_lang, T.delete),
-                      icon: const Icon(Icons.delete_outline),
-                      onPressed: () => _store.removeSite(site.id),
-                    ),
-                  ),
-                ),
-              Wrap(
-                spacing: 8,
-                children: [
-                  OutlinedButton.icon(
-                    onPressed: _locating ? null : _addLocation,
-                    icon: _locating
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.add_location_alt),
-                    label: Text(t(_lang, T.addCurrentLocation)),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: _locating ? null : _addLocationByCoordinates,
-                    icon: const Icon(Icons.edit_location_alt_outlined),
-                    label: Text(t(_lang, T.enterCoordinates)),
-                  ),
+              ],
+              bottom: TabBar(
+                tabs: [
+                  Tab(icon: const Icon(Icons.today), text: t(_lang, T.today)),
+                  Tab(icon: const Icon(Icons.tune), text: t(_lang, T.setup)),
                 ],
               ),
+            ),
+            body: TabBarView(
+              children: [
+                _TodayTab(store: _store, projectId: project.id, lang: _lang),
+                ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    // 1. Jobs and roles: the lists workers are given from.
+                    _Section(title: t(_lang, T.jobs)),
+                    _ChipList(
+                      items: project.jobs,
+                      empty: t(_lang, T.noneYet),
+                      onRemove: (j) => _removeListItem(j, job: true),
+                      addLabel: t(_lang, T.addJob),
+                      onAdd: () => _addListItem(job: true),
+                    ),
+                    _Section(title: t(_lang, T.roles)),
+                    _ChipList(
+                      items: project.roles,
+                      empty: t(_lang, T.noneYet),
+                      onRemove: (r) => _removeListItem(r, job: false),
+                      addLabel: t(_lang, T.addRole),
+                      onAdd: () => _addListItem(job: false),
+                    ),
 
-              // 3. Workers, each with a role and a job.
-              _Section(title: t(_lang, T.workers)),
-              if (workers.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Text(t(_lang, T.noWorkers), style: text.bodySmall),
+                    // 2. Locations, each with its own shift.
+                    _Section(title: t(_lang, T.locations)),
+                    if (sites.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Text(
+                          t(_lang, T.noLocationsYet),
+                          style: text.bodySmall,
+                        ),
+                      ),
+                    for (final site in sites)
+                      Card(
+                        child: ListTile(
+                          leading: const Icon(Icons.place_outlined),
+                          title: Text(site.name),
+                          subtitle: Text(
+                            '${t(_lang, T.shift)} '
+                            '${formatShiftTime(site.shiftStartMinutes)}–'
+                            '${formatShiftTime(site.shiftEndMinutes)}\n'
+                            '${site.latitude.toStringAsFixed(5)}, '
+                            '${site.longitude.toStringAsFixed(5)}',
+                          ),
+                          isThreeLine: true,
+                          onTap: () => _editShift(site),
+                          trailing: IconButton(
+                            tooltip: t(_lang, T.delete),
+                            icon: const Icon(Icons.delete_outline),
+                            onPressed: () => _store.removeSite(site.id),
+                          ),
+                        ),
+                      ),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: _locating ? null : _addLocation,
+                          icon: _locating
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.add_location_alt),
+                          label: Text(t(_lang, T.addCurrentLocation)),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _locating
+                              ? null
+                              : _addLocationByCoordinates,
+                          icon: const Icon(Icons.edit_location_alt_outlined),
+                          label: Text(t(_lang, T.enterCoordinates)),
+                        ),
+                      ],
+                    ),
+
+                    // 3. Workers, each with a role and a job.
+                    _Section(title: t(_lang, T.workers)),
+                    if (workers.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Text(
+                          t(_lang, T.noWorkers),
+                          style: text.bodySmall,
+                        ),
+                      ),
+                    for (final w in workers)
+                      Card(
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            child: Text(w.name.characters.first),
+                          ),
+                          title: Text(w.name),
+                          subtitle: Text(
+                            [
+                              if (w.role.isNotEmpty) w.role,
+                              if (w.job.isNotEmpty) w.job,
+                            ].join(' · '),
+                          ),
+                          trailing: const Icon(Icons.edit_outlined),
+                          onTap: () => _editAssignment(w),
+                        ),
+                      ),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: _registerWorker,
+                          icon: const Icon(Icons.person_add),
+                          label: Text(t(_lang, T.registerWorker)),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _addExisting,
+                          icon: const Icon(Icons.group_add_outlined),
+                          label: Text(t(_lang, T.assignWorker)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                  ],
                 ),
-              for (final w in workers)
-                Card(
-                  child: ListTile(
-                    leading: CircleAvatar(child: Text(w.name.characters.first)),
-                    title: Text(w.name),
-                    subtitle: Text([
-                      if (w.role.isNotEmpty) w.role,
-                      if (w.job.isNotEmpty) w.job,
-                    ].join(' · ')),
-                    trailing: const Icon(Icons.edit_outlined),
-                    onTap: () => _editAssignment(w),
-                  ),
-                ),
-              Wrap(
-                spacing: 8,
-                children: [
-                  OutlinedButton.icon(
-                    onPressed: _registerWorker,
-                    icon: const Icon(Icons.person_add),
-                    label: Text(t(_lang, T.registerWorker)),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: _addExisting,
-                    icon: const Icon(Icons.group_add_outlined),
-                    label: Text(t(_lang, T.assignWorker)),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-            ],
+              ],
+            ),
           ),
         );
       },
+    );
+  }
+}
+
+/// The project right now: who is at which location, hours per location
+/// today, and what a supervisor should look at. Updates every second.
+class _TodayTab extends StatelessWidget {
+  const _TodayTab({
+    required this.store,
+    required this.projectId,
+    required this.lang,
+  });
+
+  final AttendanceStore store;
+  final String projectId;
+  final String lang;
+
+  @override
+  Widget build(BuildContext context) {
+    return SecondTicker(
+      builder: (context) {
+        final today = store.projectToday(projectId);
+        final text = Theme.of(context).textTheme;
+        final scheme = Theme.of(context).colorScheme;
+
+        Widget people(List<Worker> list, Color color) => Wrap(
+          spacing: 6,
+          runSpacing: 4,
+          children: [
+            for (final w in list)
+              Chip(
+                avatar: CircleAvatar(
+                  backgroundColor: color,
+                  child: Text(
+                    w.name.characters.first,
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                ),
+                label: Text(w.role.isEmpty ? w.name : '${w.name} · ${w.role}'),
+                visualDensity: VisualDensity.compact,
+              ),
+          ],
+        );
+
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Card(
+              color: scheme.primaryContainer,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  vertical: 16,
+                  horizontal: 8,
+                ),
+                child: Row(
+                  children: [
+                    _Figure(
+                      value: '${today.onSite}',
+                      label: t(lang, T.onSiteNow),
+                    ),
+                    _Figure(
+                      value: formatHours(today.totalHours),
+                      label: t(lang, T.hoursToday),
+                    ),
+                    _Figure(value: '${today.late}', label: t(lang, T.lateFlag)),
+                    _Figure(
+                      value: '${today.autoCheckouts}',
+                      label: t(lang, T.autoCheckoutFlag),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (today.travel > Duration.zero)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Text(
+                  '${t(lang, T.travel)}: ${formatHours(today.travel)}',
+                  style: text.bodySmall,
+                ),
+              ),
+            const SizedBox(height: 8),
+            if (today.locations.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Text(
+                  t(lang, T.noLocationsYet),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            for (final location in today.locations)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.place_outlined),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              location.site.name,
+                              style: text.titleMedium,
+                            ),
+                          ),
+                          Text(
+                            formatHours(location.hoursToday),
+                            style: text.titleMedium,
+                          ),
+                        ],
+                      ),
+                      Text(
+                        '${t(lang, T.shift)} '
+                        '${formatShiftTime(location.site.shiftStartMinutes)}–'
+                        '${formatShiftTime(location.site.shiftEndMinutes)} · '
+                        '${t(lang, T.hoursToday).toLowerCase()} '
+                        '${formatHours(location.hoursToday)}',
+                        style: text.bodySmall,
+                      ),
+                      const SizedBox(height: 8),
+                      if (location.working.isEmpty && location.onBreak.isEmpty)
+                        Text(t(lang, T.nobodyHere), style: text.bodySmall)
+                      else ...[
+                        people(location.working, const Color(0xFF2E7D32)),
+                        if (location.onBreak.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(t(lang, T.onBreak), style: text.labelMedium),
+                          people(location.onBreak, const Color(0xFFEF6C00)),
+                        ],
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            if (today.notIn.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(t(lang, T.notIn), style: text.titleSmall),
+              const SizedBox(height: 4),
+              people(today.notIn, scheme.error),
+            ],
+            if (today.onLeave.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(t(lang, T.onLeave), style: text.titleSmall),
+              const SizedBox(height: 4),
+              people(today.onLeave, scheme.tertiary),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _Figure extends StatelessWidget {
+  const _Figure({required this.value, required this.label});
+
+  final String value;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return Expanded(
+      child: Column(
+        children: [
+          Text(
+            value,
+            style: text.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+          ),
+          Text(label, style: text.labelSmall, textAlign: TextAlign.center),
+        ],
+      ),
     );
   }
 }
@@ -446,9 +672,9 @@ class _Section extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(top: 16, bottom: 8),
-        child: Text(title, style: Theme.of(context).textTheme.titleMedium),
-      );
+    padding: const EdgeInsets.only(top: 16, bottom: 8),
+    child: Text(title, style: Theme.of(context).textTheme.titleMedium),
+  );
 }
 
 class _ChipList extends StatelessWidget {
@@ -468,21 +694,21 @@ class _ChipList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Wrap(
-        spacing: 8,
-        runSpacing: 4,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          if (items.isEmpty)
-            Text(empty, style: Theme.of(context).textTheme.bodySmall),
-          for (final item in items)
-            InputChip(label: Text(item), onDeleted: () => onRemove(item)),
-          ActionChip(
-            avatar: const Icon(Icons.add, size: 18),
-            label: Text(addLabel),
-            onPressed: onAdd,
-          ),
-        ],
-      );
+    spacing: 8,
+    runSpacing: 4,
+    crossAxisAlignment: WrapCrossAlignment.center,
+    children: [
+      if (items.isEmpty)
+        Text(empty, style: Theme.of(context).textTheme.bodySmall),
+      for (final item in items)
+        InputChip(label: Text(item), onDeleted: () => onRemove(item)),
+      ActionChip(
+        avatar: const Icon(Icons.add, size: 18),
+        label: Text(addLabel),
+        onPressed: onAdd,
+      ),
+    ],
+  );
 }
 
 // ------------------------------------------------------------------ dialogs
@@ -494,16 +720,15 @@ Future<String?> askText(
   required String label,
   required String saveLabel,
   required String cancelLabel,
-}) =>
-    showDialog<String>(
-      context: context,
-      builder: (_) => _TextDialog(
-        title: title,
-        label: label,
-        saveLabel: saveLabel,
-        cancelLabel: cancelLabel,
-      ),
-    );
+}) => showDialog<String>(
+  context: context,
+  builder: (_) => _TextDialog(
+    title: title,
+    label: label,
+    saveLabel: saveLabel,
+    cancelLabel: cancelLabel,
+  ),
+);
 
 class _TextDialog extends StatefulWidget {
   const _TextDialog({
@@ -538,22 +763,22 @@ class _TextDialogState extends State<_TextDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-        title: Text(widget.title),
-        content: TextField(
-          controller: _controller,
-          autofocus: true,
-          textCapitalization: TextCapitalization.words,
-          decoration: InputDecoration(labelText: widget.label),
-          onSubmitted: (_) => _save(),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(widget.cancelLabel),
-          ),
-          FilledButton(onPressed: _save, child: Text(widget.saveLabel)),
-        ],
-      );
+    title: Text(widget.title),
+    content: TextField(
+      controller: _controller,
+      autofocus: true,
+      textCapitalization: TextCapitalization.words,
+      decoration: InputDecoration(labelText: widget.label),
+      onSubmitted: (_) => _save(),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: Text(widget.cancelLabel),
+      ),
+      FilledButton(onPressed: _save, child: Text(widget.saveLabel)),
+    ],
+  );
 }
 
 /// Asks for a shift as (start, end) minutes after midnight; null when
@@ -563,11 +788,10 @@ Future<(int, int)?> askShift(
   required String lang,
   int start = Site.defaultShiftStart,
   int end = Site.defaultShiftEnd,
-}) =>
-    showDialog<(int, int)>(
-      context: context,
-      builder: (_) => _ShiftDialog(lang: lang, start: start, end: end),
-    );
+}) => showDialog<(int, int)>(
+  context: context,
+  builder: (_) => _ShiftDialog(lang: lang, start: start, end: end),
+);
 
 class _ShiftDialog extends StatefulWidget {
   const _ShiftDialog({
@@ -617,48 +841,48 @@ class _ShiftDialogState extends State<_ShiftDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-        title: Text(t(widget.lang, T.shift)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+    title: Text(t(widget.lang, T.shift)),
+    content: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => _pick(start: true),
-                    child: Text(formatShiftTime(_start)),
-                  ),
-                ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 8),
-                  child: Text('–'),
-                ),
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => _pick(start: false),
-                    child: Text(formatShiftTime(_end)),
-                  ),
-                ),
-              ],
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+            Expanded(
+              child: OutlinedButton(
+                onPressed: () => _pick(start: true),
+                child: Text(formatShiftTime(_start)),
               ),
-            ],
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 8),
+              child: Text('–'),
+            ),
+            Expanded(
+              child: OutlinedButton(
+                onPressed: () => _pick(start: false),
+                child: Text(formatShiftTime(_end)),
+              ),
+            ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(t(widget.lang, T.cancel)),
+        if (_error != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            _error!,
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
           ),
-          FilledButton(onPressed: _save, child: Text(t(widget.lang, T.save))),
         ],
-      );
+      ],
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: Text(t(widget.lang, T.cancel)),
+      ),
+      FilledButton(onPressed: _save, child: Text(t(widget.lang, T.save))),
+    ],
+  );
 }
 
 /// Asks for (latitude, longitude) in decimal degrees; null when cancelled.
@@ -667,11 +891,10 @@ class _ShiftDialogState extends State<_ShiftDialog> {
 Future<(double, double)?> askCoordinates(
   BuildContext context, {
   required String lang,
-}) =>
-    showDialog<(double, double)>(
-      context: context,
-      builder: (_) => _CoordinatesDialog(lang: lang),
-    );
+}) => showDialog<(double, double)>(
+  context: context,
+  builder: (_) => _CoordinatesDialog(lang: lang),
+);
 
 class _CoordinatesDialog extends StatefulWidget {
   const _CoordinatesDialog({required this.lang});
@@ -713,8 +936,10 @@ class _CoordinatesDialogState extends State<_CoordinatesDialog> {
   @override
   Widget build(BuildContext context) {
     final lang = widget.lang;
-    const keyboard =
-        TextInputType.numberWithOptions(decimal: true, signed: true);
+    const keyboard = TextInputType.numberWithOptions(
+      decimal: true,
+      signed: true,
+    );
     return AlertDialog(
       title: Text(t(lang, T.enterCoordinates)),
       scrollable: true,
@@ -722,8 +947,10 @@ class _CoordinatesDialogState extends State<_CoordinatesDialog> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(t(lang, T.coordinatesHelp),
-              style: Theme.of(context).textTheme.bodySmall),
+          Text(
+            t(lang, T.coordinatesHelp),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
           const SizedBox(height: 12),
           TextField(
             controller: _lat,
@@ -769,16 +996,11 @@ Future<(String, String)?> askAssignment(
   required Project project,
   String role = '',
   String job = '',
-}) =>
-    showDialog<(String, String)>(
-      context: context,
-      builder: (_) => _AssignmentDialog(
-        lang: lang,
-        project: project,
-        role: role,
-        job: job,
-      ),
-    );
+}) => showDialog<(String, String)>(
+  context: context,
+  builder: (_) =>
+      _AssignmentDialog(lang: lang, project: project, role: role, job: job),
+);
 
 class _AssignmentDialog extends StatefulWidget {
   const _AssignmentDialog({
@@ -798,10 +1020,12 @@ class _AssignmentDialog extends StatefulWidget {
 }
 
 class _AssignmentDialogState extends State<_AssignmentDialog> {
-  late String? _role =
-      widget.project.roles.contains(widget.role) ? widget.role : null;
-  late String? _job =
-      widget.project.jobs.contains(widget.job) ? widget.job : null;
+  late String? _role = widget.project.roles.contains(widget.role)
+      ? widget.role
+      : null;
+  late String? _job = widget.project.jobs.contains(widget.job)
+      ? widget.job
+      : null;
 
   @override
   Widget build(BuildContext context) {

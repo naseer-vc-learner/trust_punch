@@ -7,8 +7,10 @@ import '../i18n/phrases.dart';
 import '../i18n/ui_text.dart';
 import '../models/attendance.dart';
 import '../services/face_recognizer.dart';
+import '../services/punch_photo_store.dart';
 import '../services/speech_service.dart';
 import '../store/attendance_store.dart';
+import 'punch_result_screen.dart';
 import 'verify_screen.dart';
 
 // Pieces the worker, kiosk and supervisor home screens share.
@@ -74,6 +76,19 @@ Future<void> runPunch(
     return;
   }
 
+  // The selfie is evidence, not a gate: if it cannot be saved the punch is
+  // still recorded, just without a photo.
+  String? photoName;
+  final photo = intent.photo;
+  if (photo != null) {
+    try {
+      photoName = await (await PunchPhotoStore.shared())
+          .save(photo, workerId: intent.worker.id, at: now);
+    } catch (e) {
+      debugPrint('Punch photo not saved: $e');
+    }
+  }
+
   await store.recordPunch(
     plan,
     Punch(
@@ -87,6 +102,7 @@ Future<void> runPunch(
       latitude: intent.latitude,
       longitude: intent.longitude,
       distanceMeters: intent.distanceMeters,
+      photo: photoName,
     ),
   );
   if (!context.mounted) return;
@@ -95,16 +111,22 @@ Future<void> runPunch(
     PunchType.checkIn || PunchType.breakEnd => Phrase.workStarted,
     PunchType.checkOut || PunchType.breakStart => Phrase.workFinished,
   });
-  final clock = DateFormat('HH:mm');
   final auto = plan.autoClose;
-  showSnack(
-    context,
-    auto == null
-        ? '${intent.worker.name} · ${clock.format(now)}'
-        : '${intent.worker.name} · ${intent.site.name} ${clock.format(now)}\n'
-            '${t(lang, T.autoCheckedOut).replaceAll('{site}', auto.siteName)} '
-            '${clock.format(auto.at)}',
-  );
+  await Navigator.of(context).push(MaterialPageRoute(
+    fullscreenDialog: true,
+    builder: (_) => PunchSuccessScreen(
+      lang: lang,
+      workerName: intent.worker.name,
+      type: intent.type,
+      siteName: intent.site.name,
+      at: now,
+      photo: photo,
+      autoCheckout: auto == null
+          ? null
+          : '${t(lang, T.autoCheckedOut).replaceAll('{site}', auto.siteName)} '
+              '${DateFormat('HH:mm').format(auto.at)}',
+    ),
+  ));
 }
 
 /// Rebuilds its child every second: drives the wall clock and the live

@@ -3,9 +3,11 @@ import 'package:intl/intl.dart';
 
 import '../i18n/ui_text.dart';
 import '../models/attendance.dart';
+import '../services/punch_photo_store.dart';
 import '../services/supervisor_lock.dart';
 import '../store/attendance_store.dart';
 import 'leave_screen.dart' show leaveTypeLabel;
+import 'punch_result_screen.dart' show PunchPhotoThumb;
 import 'shared_widgets.dart' show formatBySite, formatHours;
 import 'supervisor_pin.dart';
 
@@ -81,6 +83,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
     if (confirmed != true) return;
 
     await widget.store.clearPunches();
+    // The selfies belong to those punches and go with them.
+    await (await PunchPhotoStore.shared()).deleteAll();
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -227,12 +231,14 @@ class _CalendarScreenState extends State<CalendarScreen> {
         (punch) => Card(
           child: ListTile(
             dense: true,
-            leading: Icon(switch (punch.type) {
-              PunchType.checkIn => Icons.login,
-              PunchType.checkOut => Icons.logout,
-              PunchType.breakStart => Icons.free_breakfast,
-              PunchType.breakEnd => Icons.work_outline,
-            }),
+            leading: punch.photo != null
+                ? PunchPhotoThumb(punch: punch)
+                : Icon(switch (punch.type) {
+                    PunchType.checkIn => Icons.login,
+                    PunchType.checkOut => Icons.logout,
+                    PunchType.breakStart => Icons.free_breakfast,
+                    PunchType.breakEnd => Icons.work_outline,
+                  }),
             title: Text('${punch.workerName} · ${punch.siteName}'),
             subtitle: Text([
               t(

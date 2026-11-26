@@ -168,7 +168,12 @@ class Punch {
     required this.longitude,
     required this.distanceMeters,
     this.auto = false,
+    this.photo,
   });
+
+  /// File name of the small selfie taken at this punch, kept by
+  /// `PunchPhotoStore`. Null for automatic punches and older records.
+  final String? photo;
 
   /// Added by the app, not punched by the worker: a session left open at
   /// another location (or on an earlier day) closed when they checked in.
@@ -197,6 +202,7 @@ class Punch {
         'lng': longitude,
         'distance': distanceMeters,
         if (auto) 'auto': true,
+        if (photo != null) 'photo': photo,
       };
 
   factory Punch.fromJson(Map<String, dynamic> json) => Punch(
@@ -211,6 +217,7 @@ class Punch {
         longitude: (json['lng'] as num).toDouble(),
         distanceMeters: (json['distance'] as num).toDouble(),
         auto: json['auto'] as bool? ?? false,
+        photo: json['photo'] as String?,
       );
 }
 

@@ -43,16 +43,20 @@ lib/
       integrity_service.dart     jailbreak / emulator check
       speech_service.dart        TTS, voice availability, fallback voices
       supervisor_lock.dart       supervisor PIN: salted hash, lockout after 5 tries
+      punch_photo_store.dart     small selfie per punch, app support dir, delete-all
     screens/
       role_root.dart             role picker + which home to show; supervisor idle lock
       worker_home.dart           "My own phone" (1:1): next-action button, my calendar/leave
       kiosk_home.dart            "Gate phone" (1:N): scan face, request leave, today's list
       supervisor_home.dart       on-site board, leave approvals, calendar, workers, projects
-      project_screens.dart       projects → jobs, roles, locations + shifts, workers
+      project_screens.dart       projects: Today dashboard tab + Setup tab (jobs,
+                                 roles, locations + shifts, workers)
+      punch_result_screen.dart   full-screen green success / red failure, photo thumb
       shared_widgets.dart        runPunch(), WorkerCard, ClockCard, VoiceBar, formatHours
                                  + verify, enroll, workers, sites, calendar, leave,
                                  supervisor_pin (PIN dialogs)
-test/                            lock, shift flags, leave, roles, projects (`flutter test`)
+test/                            lock, shift flags, leave, roles, projects, punch
+                                 evidence + dashboard (`flutter test`)
 assets/models/mobilefacenet.tflite   112×112 → 192-dim embedding
 _old_firebase_app/               the previous Firebase version, kept for reference
 ```
@@ -151,6 +155,14 @@ automatic check-out and the punch together (`recordPunch`).
 - **Travel is an estimate**: straight-line distance ignores roads, so real
   journeys are longer; the auto check-out time is shown as estimated.
 - **Project screens are English-only**, like the other supervisor screens.
+- **A small selfie is kept per punch** (≤360 px, JPEG 70, file name on
+  `Punch.photo`) as evidence; the full-size camera photo and the rotated
+  temp copy are deleted right after use, at check-in and enrolment alike.
+  Selfies live in the app support folder, show in the calendar and the
+  green result screen, and are removed by "Delete all attendance" — there
+  is no age-based retention yet. Android backup and device transfer are off
+  (`allowBackup=false` + `data_extraction_rules.xml`); **iOS files are not
+  yet excluded from iCloud/computer backup.**
 - **Locations can be added by typed coordinates** (supervisor only, range
   checked; a "lat, long" pair pasted from a map app is split). They skip the
   30 m GPS check, so a typo puts the 50 m circle in the wrong place — the
@@ -168,6 +180,7 @@ automatic check-out and the punch together (`recordPunch`).
 
 ## Possible next steps
 
-Discussed but not built: store the verification selfie per punch, CSV export
-for payroll, full-screen green/red result feedback, photo-based site and worker
-identity, clock-tampering detection.
+Discussed but not built: CSV/Excel payroll export, photo-based site and worker
+identity, clock-tampering detection, a demo-data button, missed-punch
+correction requests, overtime approval, end-of-shift reminders, iOS backup
+exclusion for selfies and data.
