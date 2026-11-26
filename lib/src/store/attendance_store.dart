@@ -70,6 +70,38 @@ class AttendanceStore extends ChangeNotifier {
   final List<OvertimeDecision> _overtime;
   final List<CorrectionRequest> _corrections;
 
+  /// True inside [batch]: saves wait until the end.
+  bool _batching = false;
+
+  /// Runs [body] with saving held back, then saves everything once — for
+  /// bulk changes such as loading demo data, which would otherwise rewrite
+  /// the whole punch list after every punch.
+  Future<void> batch(Future<void> Function() body) async {
+    _batching = true;
+    try {
+      await body();
+    } finally {
+      _batching = false;
+      await _savePunches();
+      await _saveWorkers();
+      await _saveSites();
+      await _saveProjects();
+      await _saveLeaves();
+      await _saveCorrections();
+      await _saveOvertime();
+    }
+  }
+
+  /// Deletes everything recorded for [workerIds] — punches, leave,
+  /// corrections and overtime decisions — but not the workers themselves.
+  Future<void> removeRecordsOf(Set<String> workerIds) async {
+    _punches.removeWhere((p) => workerIds.contains(p.workerId));
+    _leaves.removeWhere((l) => workerIds.contains(l.workerId));
+    _corrections.removeWhere((c) => workerIds.contains(c.workerId));
+    _overtime.removeWhere((d) => workerIds.contains(d.workerId));
+    await batch(() async {});
+  }
+
   static const _punchesKey = 'punches';
   static const _sitesKey = 'sites';
   static const _workersKey = 'workers';
@@ -625,6 +657,11 @@ class AttendanceStore extends ChangeNotifier {
       minutes: approve ? overtimeOn(workerId, day).inMinutes : 0,
       decidedAt: DateTime.now(),
     ));
+    await _saveOvertime();
+  }
+
+  Future<void> _saveOvertime() async {
+    if (_batching) return;
     await _prefs.setStringList(
       _overtimeKey,
       _overtime.map((d) => jsonEncode(d.toJson())).toList(),
@@ -825,6 +862,7 @@ class AttendanceStore extends ChangeNotifier {
   }
 
   Future<void> _saveCorrections() async {
+    if (_batching) return;
     await _prefs.setStringList(
       _correctionsKey,
       _corrections.map((c) => jsonEncode(c.toJson())).toList(),
@@ -875,6 +913,7 @@ class AttendanceStore extends ChangeNotifier {
   }
 
   Future<void> _savePunches() async {
+    if (_batching) return;
     await _prefs.setStringList(
       _punchesKey,
       _punches.map((p) => jsonEncode(p.toJson())).toList(),
@@ -908,6 +947,7 @@ class AttendanceStore extends ChangeNotifier {
   }
 
   Future<void> _saveWorkers() async {
+    if (_batching) return;
     await _prefs.setStringList(
       _workersKey,
       _workers.map((w) => jsonEncode(w.toJson())).toList(),
@@ -940,9 +980,9 @@ class AttendanceStore extends ChangeNotifier {
 
   // ---------------------------------------------------------------- projects
 
-  Future<Project> addProject(String name) async {
+  Future<Project> addProject(String name, {String? id}) async {
     final project = Project(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      id: id ?? DateTime.now().microsecondsSinceEpoch.toString(),
       name: name.trim(),
     );
     _projects.add(project);
@@ -968,6 +1008,7 @@ class AttendanceStore extends ChangeNotifier {
   }
 
   Future<void> _saveProjects() async {
+    if (_batching) return;
     await _prefs.setStringList(
       _projectsKey,
       _projects.map((p) => jsonEncode(p.toJson())).toList(),
@@ -976,6 +1017,7 @@ class AttendanceStore extends ChangeNotifier {
   }
 
   Future<void> _saveSites() async {
+    if (_batching) return;
     await _prefs.setStringList(
       _sitesKey,
       _sites.map((s) => jsonEncode(s.toJson())).toList(),
@@ -1087,6 +1129,7 @@ class AttendanceStore extends ChangeNotifier {
   }
 
   Future<void> _saveLeaves() async {
+    if (_batching) return;
     await _prefs.setStringList(
       _leavesKey,
       _leaves.map((l) => jsonEncode(l.toJson())).toList(),

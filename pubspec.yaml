@@ -50,6 +50,10 @@ dependencies:
   # 22 line; 23.x was weeks old when chosen.
   flutter_local_notifications: 22.3.3
   timezone: 0.11.2
+  # Location map preview with the 50 m check-in circle (OpenStreetMap tiles;
+  # needs internet, supervisor screens only).
+  flutter_map: 8.3.2
+  latlong2: 0.10.1
 
 dev_dependencies:
   flutter_test:
