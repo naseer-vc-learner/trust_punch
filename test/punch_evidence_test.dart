@@ -240,8 +240,16 @@ void main() {
 
     expect(find.text('Gate A'), findsOneWidget);
     expect(find.text('Gate B'), findsOneWidget);
-    expect(find.text('Asha · Mason'), findsOneWidget);
+    // Once as a chip at Gate B, once in the People today list.
+    expect(find.text('Asha · Mason'), findsNWidgets(2));
+    expect(find.text('In 00:01 · Out still in'), findsOneWidget);
     expect(find.text('Nobody here right now'), findsOneWidget); // Gate A
-    expect(find.text('Ravi · Mason'), findsOneWidget); // under "Not in"
+    // Further down, under "Not in".
+    await tester.scrollUntilVisible(find.text('Ravi · Mason'), 200,
+        scrollable: find
+            .byWidgetPredicate((w) =>
+                w is Scrollable && w.axisDirection == AxisDirection.down)
+            .first);
+    expect(find.text('Ravi · Mason'), findsOneWidget);
   });
 }

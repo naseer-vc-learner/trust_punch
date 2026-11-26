@@ -6,6 +6,7 @@ import '../services/face_recognizer.dart';
 import '../services/speech_service.dart';
 import '../services/supervisor_lock.dart';
 import '../store/attendance_store.dart';
+import 'approvals_screens.dart' show requestCorrectionFlow;
 import 'calendar_screen.dart';
 import 'leave_screen.dart';
 import 'shared_widgets.dart';
@@ -80,6 +81,8 @@ class WorkerHome extends StatelessWidget {
                   recognizer: recognizer,
                   speech: speech,
                   restrictTo: me,
+                  // A personal phone: remind its owner at shift end.
+                  remindAtShiftEnd: true,
                 ),
               ),
               const SizedBox(height: 16),
@@ -125,6 +128,16 @@ class WorkerHome extends StatelessWidget {
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.edit_calendar),
+                label: Text(t(lang, T.fixPunch)),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(52),
+                ),
+                onPressed: () =>
+                    requestCorrectionFlow(context, store, fixedWorker: me),
               ),
             ],
             const SizedBox(height: 16),

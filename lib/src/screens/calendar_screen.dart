@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 
 import '../i18n/ui_text.dart';
 import '../models/attendance.dart';
+import '../models/requests.dart';
 import '../services/punch_photo_store.dart';
 import '../services/supervisor_lock.dart';
 import '../store/attendance_store.dart';
@@ -193,6 +194,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
         final flags = widget.store.flagsFor(worker.id, _selected);
         final bySite = widget.store.workedBySiteOn(worker.id, _selected);
         final travel = widget.store.travelOn(worker.id, _selected);
+        final overtimeStatus =
+            widget.store.overtimeStatus(worker.id, _selected);
         return Card(
           child: ListTile(
             leading: CircleAvatar(child: Text(worker.name.characters.first)),
@@ -207,6 +210,16 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 if (flags.overtime) t(lang, T.overtimeFlag),
                 if (flags.short) t(lang, T.shortFlag),
                 if (flags.autoCheckout) t(lang, T.autoCheckoutFlag),
+                if (flags.corrected) t(lang, T.correctedFlag),
+                if (flags.clockSuspect) t(lang, T.clockFlag),
+                if (overtimeStatus != null)
+                  '${t(lang, T.overtimeLabel)} '
+                      '${formatHours(widget.store.overtimeOn(worker.id, _selected))} '
+                      '(${t(lang, switch (overtimeStatus) {
+                    RequestStatus.pending => T.leavePending,
+                    RequestStatus.approved => T.leaveApproved,
+                    RequestStatus.rejected => T.leaveRejected,
+                  }).toLowerCase()})',
               ].join(' · '),
               if (bySite.isNotEmpty)
                 '${t(lang, T.hoursBySite)}: ${formatBySite(bySite)}',
@@ -254,6 +267,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
               // checking out; the time is an estimate.
               if (punch.auto)
                 t(widget.store.languageCode, T.autoCheckoutFlag),
+              if (punch.corrected)
+                t(widget.store.languageCode, T.correctedFlag),
+              if (punch.clockSuspect)
+                t(widget.store.languageCode, T.clockFlag),
             ].join(' · ')),
             trailing: Text(_clock.format(punch.at)),
           ),

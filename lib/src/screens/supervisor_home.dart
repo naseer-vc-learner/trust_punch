@@ -6,6 +6,7 @@ import '../services/face_recognizer.dart';
 import '../services/speech_service.dart';
 import '../services/supervisor_lock.dart';
 import '../store/attendance_store.dart';
+import 'approvals_screens.dart';
 import 'calendar_screen.dart';
 import 'leave_screen.dart';
 import 'shared_widgets.dart';
@@ -78,6 +79,23 @@ class SupervisorHome extends StatelessWidget {
                       context,
                       LeaveScreen(store: store, lock: lock, canDecide: true),
                     ),
+                  ),
+                  const Divider(height: 1),
+                  _ApprovalTile(
+                    icon: Icons.more_time,
+                    title: t(lang, T.overtimeApprovals),
+                    waiting: store.pendingOvertimeCount,
+                    lang: lang,
+                    onTap: () => _open(context, OvertimeScreen(store: store)),
+                  ),
+                  const Divider(height: 1),
+                  _ApprovalTile(
+                    icon: Icons.edit_calendar,
+                    title: t(lang, T.punchCorrections),
+                    waiting: store.pendingCorrectionCount,
+                    lang: lang,
+                    onTap: () =>
+                        _open(context, CorrectionsScreen(store: store)),
                   ),
                   const Divider(height: 1),
                   ListTile(
@@ -236,4 +254,36 @@ class _Count extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A list row for something waiting on the supervisor, with a count badge.
+class _ApprovalTile extends StatelessWidget {
+  const _ApprovalTile({
+    required this.icon,
+    required this.title,
+    required this.waiting,
+    required this.lang,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final int waiting;
+  final String lang;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => ListTile(
+        leading: Badge(
+          isLabelVisible: waiting > 0,
+          label: Text('$waiting'),
+          child: Icon(icon),
+        ),
+        title: Text(title),
+        subtitle: waiting > 0
+            ? Text(t(lang, T.waitingCount).replaceAll('{n}', '$waiting'))
+            : null,
+        trailing: const Icon(Icons.chevron_right),
+        onTap: onTap,
+      );
 }

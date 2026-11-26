@@ -26,7 +26,11 @@ class PunchIntent {
     required this.longitude,
     required this.distanceMeters,
     this.photo,
+    this.gpsTime,
   });
+
+  /// The GPS fix's own time, compared with the phone's clock when saving.
+  final DateTime? gpsTime;
 
   final Worker worker;
   final Site site;
@@ -115,6 +119,13 @@ class _VerifyScreenState extends State<VerifyScreen> {
     try {
       if (await _integrity.isCompromised()) {
         _block(t(_lang, T.deviceNotSafe));
+        return;
+      }
+
+      // A clock set back would let a punch claim a time the worker was not
+      // there. Refused before the camera even opens.
+      if (widget.store.clockLooksWrong(DateTime.now())) {
+        _block(t(_lang, T.clockWrong));
         return;
       }
 
@@ -259,6 +270,7 @@ class _VerifyScreenState extends State<VerifyScreen> {
       longitude: fix.longitude,
       distanceMeters: _distance,
       photo: _photo,
+      gpsTime: fix.fixTime,
     ));
   }
 

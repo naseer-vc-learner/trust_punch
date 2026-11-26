@@ -49,7 +49,13 @@ class LocationFix {
     required this.longitude,
     required this.accuracyMeters,
     required this.isMocked,
+    this.fixTime,
   });
+
+  /// When the fix was taken, as the location system reports it. On Android
+  /// with GPS this comes from the satellites, independent of the phone's
+  /// clock; on iOS it follows the phone's clock, so it never disagrees.
+  final DateTime? fixTime;
 
   final double latitude;
   final double longitude;
@@ -107,6 +113,7 @@ class LocationService {
       longitude: position.longitude,
       accuracyMeters: position.accuracy,
       isMocked: position.isMocked,
+      fixTime: position.timestamp,
     );
   }
 }

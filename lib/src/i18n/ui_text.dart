@@ -124,6 +124,12 @@ enum T {
   travel,
   autoCheckoutFlag,
   close,
+  clockWrong,
+  clockFlag,
+  correctedFlag,
+  fixPunch,
+  reminderTitle,
+  reminderBody,
   // Projects screens, English-only like the other supervisor screens.
   projects,
   newProject,
@@ -150,6 +156,25 @@ enum T {
   coordinatesHelp,
   hoursToday,
   nobodyHere,
+  overtimeApprovals,
+  punchCorrections,
+  overtimeLabel,
+  inLabel,
+  outLabel,
+  stillIn,
+  lateBy,
+  peopleToday,
+  payable,
+  correctionSent,
+  correctionNotFit,
+  missedWhat,
+  whenLabel,
+  locationLabel,
+  reasonRequired,
+  noOvertime,
+  noCorrections,
+  replacedLabel,
+  afterShift,
 }
 
 /// Machine-written outside English — have a native speaker check before real
@@ -239,7 +264,7 @@ const _ui = <String, Map<T, String>>{
     T.clearAttendance: 'Delete all attendance',
     T.clearAttendanceConfirm:
         'Every attendance record on this phone will be deleted. Workers and '
-            'sites are kept. This cannot be undone.',
+        'sites are kept. This cannot be undone.',
     T.delete: 'Delete',
     T.attendanceCleared: 'Attendance deleted',
     T.unlock: 'Unlock',
@@ -274,6 +299,13 @@ const _ui = <String, Map<T, String>>{
     T.travel: 'Travel',
     T.autoCheckoutFlag: 'Auto check-out',
     T.close: 'Close',
+    T.clockWrong: 'Phone time looks wrong. Turn on automatic date and time.',
+    T.clockFlag: 'Clock check',
+    T.correctedFlag: 'Corrected',
+    T.fixPunch: 'Fix a missed punch',
+    T.reminderTitle: '{site}: still checked in',
+    T.reminderBody:
+        'Your shift ended at {time}. Finish work in the app when you leave.',
     T.projects: 'Projects',
     T.newProject: 'New project',
     T.projectName: 'Project name',
@@ -300,9 +332,28 @@ const _ui = <String, Map<T, String>>{
         'Use decimal degrees: latitude −90 to 90, longitude −180 to 180',
     T.coordinatesHelp:
         'Paste "lat, long" from a map app. Check the point first: check-in '
-            'works only within 50 m of it.',
+        'works only within 50 m of it.',
     T.hoursToday: 'Hours today',
     T.nobodyHere: 'Nobody here right now',
+    T.overtimeApprovals: 'Overtime approvals',
+    T.punchCorrections: 'Punch corrections',
+    T.overtimeLabel: 'Overtime',
+    T.inLabel: 'In',
+    T.outLabel: 'Out',
+    T.stillIn: 'still in',
+    T.lateBy: 'Late {m} min',
+    T.peopleToday: 'People today',
+    T.payable: 'Payable',
+    T.correctionSent: 'Correction sent — waiting for approval',
+    T.correctionNotFit: 'This correction does not fit the punches of that day',
+    T.missedWhat: 'What was missed',
+    T.whenLabel: 'When',
+    T.locationLabel: 'Location',
+    T.reasonRequired: 'Reason (required)',
+    T.noOvertime: 'No overtime waiting',
+    T.noCorrections: 'No correction requests',
+    T.replacedLabel: 'replaced',
+    T.afterShift: 'Still in after shift end',
   },
   'hi': {
     T.startWorkBig: 'काम शुरू',
@@ -374,12 +425,20 @@ const _ui = <String, Map<T, String>>{
     T.roleSupervisor: 'सुपरवाइज़र',
     T.switchRole: 'उपयोगकर्ता बदलें',
     T.myAttendance: 'मेरी हाज़िरी',
-    T.askSupervisor: 'इस फोन पर अपना चेहरा दर्ज कराने के लिए अपने सुपरवाइज़र से कहें।',
+    T.askSupervisor:
+        'इस फोन पर अपना चेहरा दर्ज कराने के लिए अपने सुपरवाइज़र से कहें।',
     T.notYourSite: 'यह आपके प्रोजेक्ट की जगह नहीं है',
     T.autoCheckedOut: '{site}: स्वचालित चेक-आउट, समय',
     T.travel: 'यात्रा',
     T.autoCheckoutFlag: 'स्वचालित चेक-आउट',
     T.close: 'बंद करें',
+    T.clockWrong: 'फोन का समय गलत लगता है। स्वचालित दिनांक और समय चालू करें।',
+    T.clockFlag: 'समय जाँचें',
+    T.correctedFlag: 'सुधारा गया',
+    T.fixPunch: 'छूटी हाज़िरी ठीक करें',
+    T.reminderTitle: '{site}: अभी भी काम पर दर्ज',
+    T.reminderBody:
+        'आपकी शिफ्ट {time} बजे खत्म हुई। जाते समय ऐप में काम खत्म करें।',
     T.requestLeave: 'छुट्टी माँगें',
   },
   'ml': {
@@ -452,12 +511,21 @@ const _ui = <String, Map<T, String>>{
     T.roleSupervisor: 'സൂപ്പർവൈസർ',
     T.switchRole: 'ഉപയോക്താവിനെ മാറ്റുക',
     T.myAttendance: 'എന്റെ ഹാജർ',
-    T.askSupervisor: 'ഈ ഫോണിൽ നിങ്ങളുടെ മുഖം രജിസ്റ്റർ ചെയ്യാൻ സൂപ്പർവൈസറോട് പറയുക.',
+    T.askSupervisor:
+        'ഈ ഫോണിൽ നിങ്ങളുടെ മുഖം രജിസ്റ്റർ ചെയ്യാൻ സൂപ്പർവൈസറോട് പറയുക.',
     T.notYourSite: 'ഇത് നിങ്ങളുടെ പ്രോജക്റ്റിന്റെ സ്ഥലമല്ല',
     T.autoCheckedOut: '{site}: സ്വയം ചെക്ക്-ഔട്ട്, സമയം',
     T.travel: 'യാത്ര',
     T.autoCheckoutFlag: 'സ്വയം ചെക്ക്-ഔട്ട്',
     T.close: 'അടയ്ക്കുക',
+    T.clockWrong:
+        'ഫോണിലെ സമയം തെറ്റാണെന്ന് തോന്നുന്നു. ഓട്ടോമാറ്റിക് തീയതിയും സമയവും ഓണാക്കുക.',
+    T.clockFlag: 'സമയം പരിശോധിക്കുക',
+    T.correctedFlag: 'തിരുത്തി',
+    T.fixPunch: 'വിട്ടുപോയ പഞ്ച് ശരിയാക്കുക',
+    T.reminderTitle: '{site}: ഇപ്പോഴും ചെക്ക്-ഇൻ ആണ്',
+    T.reminderBody:
+        'നിങ്ങളുടെ ഷിഫ്റ്റ് {time}-ന് അവസാനിച്ചു. പോകുമ്പോൾ ആപ്പിൽ ജോലി തീർക്കുക.',
     T.requestLeave: 'അവധി ചോദിക്കുക',
   },
   'ta': {
@@ -530,12 +598,21 @@ const _ui = <String, Map<T, String>>{
     T.roleSupervisor: 'மேற்பார்வையாளர்',
     T.switchRole: 'பயனரை மாற்று',
     T.myAttendance: 'என் வருகை',
-    T.askSupervisor: 'இந்த ஃபோனில் உங்கள் முகத்தைப் பதிவு செய்ய மேற்பார்வையாளரிடம் கேளுங்கள்.',
+    T.askSupervisor:
+        'இந்த ஃபோனில் உங்கள் முகத்தைப் பதிவு செய்ய மேற்பார்வையாளரிடம் கேளுங்கள்.',
     T.notYourSite: 'இது உங்கள் திட்டத்தின் இடம் அல்ல',
     T.autoCheckedOut: '{site}: தானியங்கி வெளியேற்றம், நேரம்',
     T.travel: 'பயணம்',
     T.autoCheckoutFlag: 'தானியங்கி வெளியேற்றம்',
     T.close: 'மூடு',
+    T.clockWrong:
+        'ஃபோன் நேரம் தவறாக உள்ளது. தானியங்கி தேதி மற்றும் நேரத்தை இயக்கவும்.',
+    T.clockFlag: 'நேரச் சரிபார்ப்பு',
+    T.correctedFlag: 'திருத்தப்பட்டது',
+    T.fixPunch: 'தவறிய பதிவைச் சரிசெய்',
+    T.reminderTitle: '{site}: இன்னும் பதிவில் உள்ளீர்கள்',
+    T.reminderBody:
+        'உங்கள் பணிநேரம் {time} மணிக்கு முடிந்தது. செல்லும்போது செயலியில் வேலையை முடிக்கவும்.',
     T.requestLeave: 'விடுப்பு கேள்',
   },
   'ur': {
@@ -608,12 +685,20 @@ const _ui = <String, Map<T, String>>{
     T.roleSupervisor: 'سپروائزر',
     T.switchRole: 'صارف تبدیل کریں',
     T.myAttendance: 'میری حاضری',
-    T.askSupervisor: 'اس فون پر اپنا چہرہ رجسٹر کروانے کے لیے اپنے سپروائزر سے کہیں۔',
+    T.askSupervisor:
+        'اس فون پر اپنا چہرہ رجسٹر کروانے کے لیے اپنے سپروائزر سے کہیں۔',
     T.notYourSite: 'یہ آپ کے پروجیکٹ کی جگہ نہیں ہے',
     T.autoCheckedOut: '{site}: خودکار چیک آؤٹ، وقت',
     T.travel: 'سفر',
     T.autoCheckoutFlag: 'خودکار چیک آؤٹ',
     T.close: 'بند کریں',
+    T.clockWrong: 'فون کا وقت غلط لگتا ہے۔ خودکار تاریخ اور وقت آن کریں۔',
+    T.clockFlag: 'وقت کی جانچ',
+    T.correctedFlag: 'درست کیا گیا',
+    T.fixPunch: 'چھوٹی حاضری درست کریں',
+    T.reminderTitle: '{site}: ابھی تک چیک ان ہیں',
+    T.reminderBody:
+        'آپ کی شفٹ {time} بجے ختم ہو گئی۔ جاتے وقت ایپ میں کام ختم کریں۔',
     T.requestLeave: 'چھٹی مانگیں',
   },
   'bn': {
@@ -692,11 +777,20 @@ const _ui = <String, Map<T, String>>{
     T.travel: 'যাতায়াত',
     T.autoCheckoutFlag: 'স্বয়ংক্রিয় চেক-আউট',
     T.close: 'বন্ধ করুন',
+    T.clockWrong:
+        'ফোনের সময় ভুল মনে হচ্ছে। স্বয়ংক্রিয় তারিখ ও সময় চালু করুন।',
+    T.clockFlag: 'সময় যাচাই',
+    T.correctedFlag: 'সংশোধিত',
+    T.fixPunch: 'বাদ পড়া পাঞ্চ ঠিক করুন',
+    T.reminderTitle: '{site}: এখনও চেক-ইন আছেন',
+    T.reminderBody:
+        'আপনার শিফট {time}-এ শেষ হয়েছে। যাওয়ার সময় অ্যাপে কাজ শেষ করুন।',
     T.requestLeave: 'ছুটি চান',
   },
 };
 
-String t(String languageCode, T key) => _ui[languageCode]?[key] ?? _ui['en']![key]!;
+String t(String languageCode, T key) =>
+    _ui[languageCode]?[key] ?? _ui['en']![key]!;
 
 /// Urdu is written right-to-left; the whole layout has to mirror with it.
 bool isRtl(String languageCode) => languageCode == 'ur';

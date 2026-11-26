@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/attendance.dart';
 import '../models/leave.dart';
 import '../models/project.dart';
+import '../models/requests.dart';
 import '../services/location_service.dart' show haversineMeters;
 
 /// Standard day, whatever the locations' shifts: anything past this is
@@ -14,6 +15,14 @@ const standardDay = Duration(hours: 8);
 
 /// How late after a location's shift start still counts as on time.
 const lateGrace = Duration(minutes: 10);
+
+/// How far the phone's clock may sit behind the newest punch before a new
+/// punch is refused as a clock set back.
+const clockTolerance = Duration(minutes: 2);
+
+/// How far the phone's clock may differ from the GPS time before a punch is
+/// flagged for the supervisor.
+const gpsClockTolerance = Duration(minutes: 5);
 
 /// Assumed speed between two locations of a project, for estimating travel
 /// when a worker moves without checking out: 30 km/h, city traffic.
@@ -48,10 +57,18 @@ class AttendanceStore extends ChangeNotifier {
     this._workers,
     this._leaves,
     this._projects,
+    this._overtime,
+    this._corrections,
     this._languageCode,
     this._lastRole,
     this._activeWorkerId,
   );
+
+  static const _overtimeKey = 'overtime';
+  static const _correctionsKey = 'corrections';
+
+  final List<OvertimeDecision> _overtime;
+  final List<CorrectionRequest> _corrections;
 
   static const _punchesKey = 'punches';
   static const _sitesKey = 'sites';
@@ -120,6 +137,21 @@ class AttendanceStore extends ChangeNotifier {
           _workersKey, [for (final w in workers) jsonEncode(w.toJson())]);
     }
 
+    final overtime = (prefs.getStringList(_overtimeKey) ?? const <String>[])
+        .map((e) =>
+            OvertimeDecision.fromJson(jsonDecode(e) as Map<String, dynamic>))
+        .toList();
+
+    final corrections =
+        (prefs.getStringList(_correctionsKey) ?? const <String>[])
+            .map((e) => CorrectionRequest.fromJson(
+                jsonDecode(e) as Map<String, dynamic>))
+            .toList();
+
+    // Corrections insert punches at their real time, so the list is kept in
+    // time order; older saves made in arrival order are sorted once here.
+    punches.sort((a, b) => a.at.compareTo(b.at));
+
     return AttendanceStore._(
       prefs,
       punches,
@@ -127,6 +159,8 @@ class AttendanceStore extends ChangeNotifier {
       workers,
       leaves,
       projects,
+      overtime,
+      corrections,
       prefs.getString(_languageKey) ?? 'en',
       _parseRole(prefs.getString(_roleKey)),
       prefs.getString(_activeWorkerKey),
@@ -295,8 +329,8 @@ class AttendanceStore extends ChangeNotifier {
   /// as one write.
   Future<void> recordPunch(PunchPlan plan, Punch punch) async {
     final auto = plan.autoClose;
-    if (auto != null) _punches.add(auto);
-    _punches.add(punch);
+    if (auto != null) _insertSorted(auto);
+    _insertSorted(punch);
     await _savePunches();
   }
 
@@ -391,6 +425,7 @@ class AttendanceStore extends ChangeNotifier {
     final hours = <String, Duration>{};
     final notIn = <Worker>[];
     final onLeave = <Worker>[];
+    final afterShift = <(Worker, Site)>[];
     var total = Duration.zero;
     var travel = Duration.zero;
     var late = 0;
@@ -407,6 +442,10 @@ class AttendanceStore extends ChangeNotifier {
         (last.type == PunchType.breakStart ? onBreak : working)
             .putIfAbsent(last.siteId, () => [])
             .add(w);
+        final site = siteById(last.siteId);
+        if (site != null && at.isAfter(site.shiftEndOn(at))) {
+          afterShift.add((w, site));
+        }
       } else if (leaveOn(w.id, at) != null) {
         onLeave.add(w);
       } else if (punchesFor(w.id, at).isEmpty) {
@@ -435,6 +474,7 @@ class AttendanceStore extends ChangeNotifier {
       ],
       notIn: notIn,
       onLeave: onLeave,
+      afterShift: afterShift,
       totalHours: total,
       travel: travel,
       late: late,
@@ -468,30 +508,328 @@ class AttendanceStore extends ChangeNotifier {
     final punches = punchesFor(workerId, day);
     if (punches.isEmpty) return const ShiftFlags();
 
-    final firstIn = punches.firstWhere(
-      (p) => p.type == PunchType.checkIn,
-      orElse: () => punches.first,
-    );
-    // Late is judged against the shift of the location the day started at.
-    final firstSite = siteById(firstIn.siteId);
-    final shiftStart = firstSite?.shiftStartOn(day) ??
-        DateTime(day.year, day.month, day.day)
-            .add(const Duration(minutes: Site.defaultShiftStart));
+    final firstIn = _firstIn(punches);
     final worked = workedOn(workerId, day);
 
-    // A day is judged short once it is over: either it ended in a check-out,
-    // or it is a past day (an open session there stopped counting at the
-    // day's last punch). Judging it by the worker's status right now would
-    // hide every past short day while that worker is clocked in today.
-    final dayOver = punches.last.type == PunchType.checkOut ||
-        !_isSameDay(day, DateTime.now());
-
     return ShiftFlags(
-      late: firstIn.at.isAfter(shiftStart.add(lateGrace)),
+      late: firstIn.at.isAfter(_shiftStartFor(firstIn, day).add(lateGrace)),
       overtime: worked > standardDay,
-      short: dayOver && worked < standardDay,
+      short: _dayOver(punches, day) && worked < standardDay,
       autoCheckout: punches.any((p) => p.auto),
+      corrected: punches.any((p) => p.corrected),
+      clockSuspect: punches.any((p) => p.clockSuspect),
     );
+  }
+
+  static Punch _firstIn(List<Punch> punches) => punches.firstWhere(
+        (p) => p.type == PunchType.checkIn,
+        orElse: () => punches.first,
+      );
+
+  /// Late is judged against the shift of the location the day started at.
+  DateTime _shiftStartFor(Punch firstIn, DateTime day) =>
+      siteById(firstIn.siteId)?.shiftStartOn(day) ??
+      DateTime(day.year, day.month, day.day)
+          .add(const Duration(minutes: Site.defaultShiftStart));
+
+  /// A day is judged once it is over: it ended in a check-out, or it is a
+  /// past day (an open session there stopped counting at its last punch).
+  /// Judging by the worker's status right now would hide every past day
+  /// while that worker is clocked in today.
+  static bool _dayOver(List<Punch> punches, DateTime day) =>
+      punches.isNotEmpty &&
+      (punches.last.type == PunchType.checkOut ||
+          !_isSameDay(day, DateTime.now()));
+
+  /// One worker's day for the supervisor: times, lateness, break, hours.
+  WorkerDay workerDay(String workerId, DateTime day) {
+    final punches = punchesFor(workerId, day);
+    if (punches.isEmpty) return const WorkerDay();
+    final firstIn = _firstIn(punches);
+    final shiftStart = _shiftStartFor(firstIn, day);
+    final late = firstIn.at.isAfter(shiftStart.add(lateGrace));
+    final last = punches.last;
+    return WorkerDay(
+      firstIn: firstIn.at,
+      lastOut: last.type == PunchType.checkOut ? last.at : null,
+      lateBy: late ? firstIn.at.difference(shiftStart) : Duration.zero,
+      worked: workedOn(workerId, day),
+      breaks: breakOn(workerId, day),
+      travel: travelOn(workerId, day),
+      overtime: overtimeOn(workerId, day),
+      overtimeStatus: overtimeStatus(workerId, day),
+    );
+  }
+
+  // ---------------------------------------------------------------- overtime
+
+  /// Worked time beyond the 8-hour day, before any approval.
+  Duration overtimeOn(String workerId, DateTime day) {
+    final worked = workedOn(workerId, day);
+    return worked > standardDay ? worked - standardDay : Duration.zero;
+  }
+
+  OvertimeDecision? overtimeDecision(String workerId, DateTime day) {
+    for (final d in _overtime) {
+      if (d.workerId == workerId && _isSameDay(d.date, day)) return d;
+    }
+    return null;
+  }
+
+  /// Null when there is no overtime that day.
+  RequestStatus? overtimeStatus(String workerId, DateTime day) {
+    if (overtimeOn(workerId, day) == Duration.zero) return null;
+    final decision = overtimeDecision(workerId, day);
+    if (decision == null) return RequestStatus.pending;
+    return decision.approved ? RequestStatus.approved : RequestStatus.rejected;
+  }
+
+  /// Days with overtime still to decide, newest first. Only finished days:
+  /// overtime still growing today is decided once the worker checks out.
+  List<(Worker, DateTime)> get pendingOvertime {
+    final result = <(Worker, DateTime)>[];
+    for (final worker in _workers) {
+      final days = {
+        for (final p in _punches)
+          if (p.workerId == worker.id) DateTime(p.at.year, p.at.month, p.at.day),
+      };
+      for (final day in days) {
+        if (overtimeStatus(worker.id, day) == RequestStatus.pending &&
+            _dayOver(punchesFor(worker.id, day), day)) {
+          result.add((worker, day));
+        }
+      }
+    }
+    result.sort((a, b) => b.$2.compareTo(a.$2));
+    return result;
+  }
+
+  int get pendingOvertimeCount => pendingOvertime.length;
+
+  /// Every overtime decision, newest day first.
+  List<OvertimeDecision> get overtimeDecisions => List.unmodifiable(
+        [..._overtime]..sort((a, b) => b.date.compareTo(a.date)),
+      );
+
+  /// Approves or rejects one day's overtime. A decided day is left alone.
+  Future<void> decideOvertime(
+    String workerId,
+    DateTime day, {
+    required bool approve,
+  }) async {
+    if (overtimeDecision(workerId, day) != null) return;
+    _overtime.add(OvertimeDecision(
+      workerId: workerId,
+      date: DateTime(day.year, day.month, day.day),
+      approved: approve,
+      minutes: approve ? overtimeOn(workerId, day).inMinutes : 0,
+      decidedAt: DateTime.now(),
+    ));
+    await _prefs.setStringList(
+      _overtimeKey,
+      _overtime.map((d) => jsonEncode(d.toJson())).toList(),
+    );
+    notifyListeners();
+  }
+
+  /// Hours to pay for a day: up to 8 hours, plus overtime only as approved.
+  Duration payableOn(String workerId, DateTime day) {
+    final worked = workedOn(workerId, day);
+    final base = worked > standardDay ? standardDay : worked;
+    final decision = overtimeDecision(workerId, day);
+    if (decision == null || !decision.approved) return base;
+    final extra = overtimeOn(workerId, day);
+    final approved = Duration(minutes: decision.minutes);
+    return base + (extra < approved ? extra : approved);
+  }
+
+  // -------------------------------------------------------------- clock check
+
+  /// True when the phone's clock is earlier than the newest punch already
+  /// recorded, beyond a small tolerance: the clock was set back, which would
+  /// let someone record a punch at a time they were not there.
+  bool clockLooksWrong(DateTime now) {
+    if (_punches.isEmpty) return false;
+    var newest = _punches.first.at;
+    for (final p in _punches) {
+      if (p.at.isAfter(newest)) newest = p.at;
+    }
+    return now.isBefore(newest.subtract(clockTolerance));
+  }
+
+  // ------------------------------------------------------------- corrections
+
+  /// Every correction request, newest first.
+  List<CorrectionRequest> get corrections => List.unmodifiable(
+        [..._corrections]..sort((a, b) => b.requestedAt.compareTo(a.requestedAt)),
+      );
+
+  int get pendingCorrectionCount =>
+      _corrections.where((c) => c.status == RequestStatus.pending).length;
+
+  /// Files a request to fix a missed check-in or check-out. Throws
+  /// [ArgumentError] for anything else, a time in the future, a missing
+  /// reason, or a location outside the worker's project.
+  Future<CorrectionRequest> requestCorrection({
+    required Worker worker,
+    required Site site,
+    required PunchType type,
+    required DateTime at,
+    required String reason,
+    DateTime? now,
+  }) async {
+    if (type != PunchType.checkIn && type != PunchType.checkOut) {
+      throw ArgumentError('Only check-in and check-out can be corrected');
+    }
+    if (at.isAfter(now ?? DateTime.now())) {
+      throw ArgumentError('A correction cannot be in the future');
+    }
+    if (reason.trim().isEmpty) throw ArgumentError('A reason is required');
+    if (!canPunchAt(worker, site)) {
+      throw ArgumentError('Not a location of this worker\'s project');
+    }
+    final request = CorrectionRequest(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      workerId: worker.id,
+      workerName: worker.name,
+      siteId: site.id,
+      siteName: site.name,
+      type: type,
+      at: at,
+      reason: reason.trim(),
+      status: RequestStatus.pending,
+      requestedAt: now ?? DateTime.now(),
+    );
+    _corrections.add(request);
+    await _saveCorrections();
+    return request;
+  }
+
+  /// Approves or rejects a pending request. Throws [StateError] when an
+  /// approval would leave the day's punches out of order (e.g. a check-out
+  /// before its own check-in); the request then stays pending.
+  ///
+  /// An approved check-out replaces the closing punch of the session it
+  /// falls in (typically an automatic one); an approved check-in replaces a
+  /// later check-in that started the same session. Otherwise the punch is
+  /// added. Either way it is marked corrected.
+  Future<void> decideCorrection(String id, {required bool approve}) async {
+    final i = _corrections.indexWhere((c) => c.id == id);
+    if (i < 0 || _corrections[i].status != RequestStatus.pending) return;
+    final request = _corrections[i];
+
+    if (!approve) {
+      _corrections[i] = request.decided(RequestStatus.rejected, DateTime.now());
+      await _saveCorrections();
+      return;
+    }
+
+    final day = punchesFor(request.workerId, request.at);
+    final replaced = _punchReplacedBy(request, day);
+    final site = siteById(request.siteId);
+    final worker = _workers.where((w) => w.id == request.workerId).firstOrNull;
+    final corrected = Punch(
+      type: request.type,
+      at: request.at,
+      workerId: request.workerId,
+      employeeId: worker?.employeeId ?? '',
+      workerName: request.workerName,
+      siteId: request.siteId,
+      siteName: request.siteName,
+      latitude: site?.latitude ?? 0,
+      longitude: site?.longitude ?? 0,
+      distanceMeters: 0,
+      corrected: true,
+    );
+
+    final after = [
+      for (final p in day)
+        if (!identical(p, replaced)) p,
+      corrected,
+    ]..sort((a, b) => a.at.compareTo(b.at));
+    if (!validDay(after)) {
+      throw StateError('This correction does not fit the punches of that day');
+    }
+
+    if (replaced != null) _punches.remove(replaced);
+    _insertSorted(corrected);
+    _corrections[i] = request.decided(
+      RequestStatus.approved,
+      DateTime.now(),
+      replacedAt: replaced?.at,
+      replacedAuto: replaced?.auto ?? false,
+    );
+    await _savePunches();
+    await _saveCorrections();
+  }
+
+  Punch? _punchReplacedBy(CorrectionRequest request, List<Punch> day) {
+    if (request.type == PunchType.checkOut) {
+      // The session the time falls in starts at the last check-in before it;
+      // its closing punch is the first check-out after that check-in.
+      Punch? sessionStart;
+      for (final p in day) {
+        if (p.type == PunchType.checkIn && !p.at.isAfter(request.at)) {
+          sessionStart = p;
+        }
+      }
+      if (sessionStart == null) return null;
+      for (final p in day) {
+        if (p.type == PunchType.checkOut && p.at.isAfter(sessionStart.at)) {
+          return p;
+        }
+      }
+      return null;
+    }
+    // A check-in replaces the next punch only if that is itself a check-in:
+    // the worker checked in late and is moving the start earlier.
+    for (final p in day) {
+      if (p.at.isAfter(request.at)) {
+        return p.type == PunchType.checkIn ? p : null;
+      }
+    }
+    return null;
+  }
+
+  /// Whether a day's punches, in time order, follow the allowed sequence:
+  /// in → (break start → break end)* → out, any number of times.
+  static bool validDay(List<Punch> punches) {
+    var state = WorkerStatus.off;
+    for (final p in punches) {
+      switch (p.type) {
+        case PunchType.checkIn:
+          if (state != WorkerStatus.off) return false;
+          state = WorkerStatus.working;
+        case PunchType.breakStart:
+          if (state != WorkerStatus.working) return false;
+          state = WorkerStatus.onBreak;
+        case PunchType.breakEnd:
+          if (state != WorkerStatus.onBreak) return false;
+          state = WorkerStatus.working;
+        case PunchType.checkOut:
+          // A session may be closed from a break (automatic check-out).
+          if (state == WorkerStatus.off) return false;
+          state = WorkerStatus.off;
+      }
+    }
+    return true;
+  }
+
+  void _insertSorted(Punch punch) {
+    final at = _punches.indexWhere((p) => p.at.isAfter(punch.at));
+    if (at < 0) {
+      _punches.add(punch);
+    } else {
+      _punches.insert(at, punch);
+    }
+  }
+
+  Future<void> _saveCorrections() async {
+    await _prefs.setStringList(
+      _correctionsKey,
+      _corrections.map((c) => jsonEncode(c.toJson())).toList(),
+    );
+    notifyListeners();
   }
 
   // ------------------------------------------------------------- whole day
@@ -532,7 +870,7 @@ class AttendanceStore extends ChangeNotifier {
   // ------------------------------------------------------------------ writes
 
   Future<void> add(Punch punch) async {
-    _punches.add(punch);
+    _insertSorted(punch);
     await _savePunches();
   }
 
@@ -789,6 +1127,7 @@ class ProjectToday {
     required this.locations,
     required this.notIn,
     required this.onLeave,
+    this.afterShift = const [],
     required this.totalHours,
     required this.travel,
     required this.late,
@@ -800,6 +1139,10 @@ class ProjectToday {
   /// On the project, no punch today, not on leave.
   final List<Worker> notIn;
   final List<Worker> onLeave;
+
+  /// Still checked in at a location whose shift has already ended: likely a
+  /// forgotten check-out, worth a call before it becomes an auto check-out.
+  final List<(Worker, Site)> afterShift;
   final Duration totalHours;
   final Duration travel;
   final int late;
@@ -809,12 +1152,43 @@ class ProjectToday {
       0, (sum, l) => sum + l.working.length + l.onBreak.length);
 }
 
+/// One worker's day, for the supervisor's view.
+class WorkerDay {
+  const WorkerDay({
+    this.firstIn,
+    this.lastOut,
+    this.lateBy = Duration.zero,
+    this.worked = Duration.zero,
+    this.breaks = Duration.zero,
+    this.travel = Duration.zero,
+    this.overtime = Duration.zero,
+    this.overtimeStatus,
+  });
+
+  /// First check-in of the day; null when there was none.
+  final DateTime? firstIn;
+
+  /// The day's check-out, when the day ended in one; null while still in.
+  final DateTime? lastOut;
+
+  /// How long after the shift start the day began; zero when on time
+  /// (within the grace period).
+  final Duration lateBy;
+  final Duration worked;
+  final Duration breaks;
+  final Duration travel;
+  final Duration overtime;
+  final RequestStatus? overtimeStatus;
+}
+
 class ShiftFlags {
   const ShiftFlags({
     this.late = false,
     this.overtime = false,
     this.short = false,
     this.autoCheckout = false,
+    this.corrected = false,
+    this.clockSuspect = false,
   });
 
   final bool late;
@@ -825,5 +1199,12 @@ class ShiftFlags {
   /// or forgot to check out). Worth a supervisor's look.
   final bool autoCheckout;
 
-  bool get any => late || overtime || short || autoCheckout;
+  /// A supervisor-approved correction changed this day.
+  final bool corrected;
+
+  /// A punch that day was made with the phone's clock off from GPS time.
+  final bool clockSuspect;
+
+  bool get any =>
+      late || overtime || short || autoCheckout || corrected || clockSuspect;
 }

@@ -32,6 +32,7 @@ lib/
     models/attendance.dart       Worker, Site, Punch, WorkerStatus, cosineSimilarity
     models/leave.dart            LeaveRequest (annual/sick/unpaid; pending/approved/rejected)
     models/project.dart          Project (jobs = activities, roles); Site carries projectId + shift
+    models/requests.dart         OvertimeDecision, CorrectionRequest (pending/approved/rejected)
     store/attendance_store.dart  all state + persistence + hours/break/flag maths
     i18n/phrases.dart            spoken lines + language list
     i18n/ui_text.dart            on-screen text (enum T), isRtl()
@@ -44,6 +45,7 @@ lib/
       speech_service.dart        TTS, voice availability, fallback voices
       supervisor_lock.dart       supervisor PIN: salted hash, lockout after 5 tries
       punch_photo_store.dart     small selfie per punch, app support dir, delete-all
+      shift_reminders.dart       shift-end notification on "My own phone" (local, inexact)
     screens/
       role_root.dart             role picker + which home to show; supervisor idle lock
       worker_home.dart           "My own phone" (1:1): next-action button, my calendar/leave
@@ -52,11 +54,13 @@ lib/
       project_screens.dart       projects: Today dashboard tab + Setup tab (jobs,
                                  roles, locations + shifts, workers)
       punch_result_screen.dart   full-screen green success / red failure, photo thumb
+      approvals_screens.dart     overtime + correction approvals; "Fix a missed punch" form
       shared_widgets.dart        runPunch(), WorkerCard, ClockCard, VoiceBar, formatHours
                                  + verify, enroll, workers, sites, calendar, leave,
                                  supervisor_pin (PIN dialogs)
 test/                            lock, shift flags, leave, roles, projects, punch
-                                 evidence + dashboard (`flutter test`)
+                                 evidence + dashboard, approvals, reminders
+                                 (`flutter test`)
 assets/models/mobilefacenet.tflite   112×112 → 192-dim embedding
 _old_firebase_app/               the previous Firebase version, kept for reference
 ```
@@ -155,6 +159,30 @@ automatic check-out and the punch together (`recordPunch`).
 - **Travel is an estimate**: straight-line distance ignores roads, so real
   journeys are longer; the auto check-out time is shown as estimated.
 - **Project screens are English-only**, like the other supervisor screens.
+- **Punches are kept in time order** (`_insertSorted`; old saves sorted on
+  load), because corrections insert punches in the past and every hours
+  calculation walks a day's punches in list order.
+- **Overtime = worked beyond 8 h/day; paid only once approved.** Finished
+  days with overtime wait in "Overtime approvals". `payableOn` = up to 8 h
+  plus the approved minutes (capped at that day's overtime). Decisions are
+  final, like leave.
+- **Corrections cover a missed check-in or check-out only**, need a reason,
+  and change nothing until approved. An approved check-out replaces the
+  closing punch of the session its time falls in (usually an automatic
+  one); an approved check-in replaces a later check-in that started the same
+  session; otherwise the punch is added. The day must still pass
+  `validDay`, or approval is refused and the request stays pending. Approved
+  punches are marked `corrected`; the request keeps what it replaced.
+- **Clock checks:** a punch is refused when the phone's clock is more than
+  2 min earlier than the newest punch on the phone (clock set back). It is
+  flagged `clockSuspect` (not refused) when the phone's clock differs from
+  the GPS fix time by more than 5 min.
+- **Shift-end reminders only on "My own phone"**: check-in / end of break
+  schedules one for that location's shift end (if still ahead), check-out
+  cancels it; gate phones never schedule. Inexact scheduling, so no
+  exact-alarm permission; failures never block a punch. Android needs
+  desugaring + the two receivers in the manifest; iOS sets the
+  notification delegate in `AppDelegate.swift`.
 - **A small selfie is kept per punch** (≤360 px, JPEG 70, file name on
   `Punch.photo`) as evidence; the full-size camera photo and the rotated
   temp copy are deleted right after use, at check-in and enrolment alike.
@@ -177,10 +205,16 @@ automatic check-out and the punch together (`recordPunch`).
   "On leave" chip is in all six languages.
 - **GPS accuracy limit is 30 m** (`maxFixAccuracyMeters`), also applied when
   saving a site. It may refuse honest check-ins indoors; tune with real sites.
+- **The GPS clock check only means something on Android**: iOS reports fix
+  times from the phone's own clock, so it never disagrees. The
+  "clock set back" check works on both, but only after at least one punch.
+- **Reminders can arrive a few minutes late** (inexact scheduling) and only
+  if the worker allowed notifications. Correction and overtime screens are
+  English-only, like the other supervisor screens; the "Fix a missed punch"
+  button and the reminder text are in all six languages.
 
 ## Possible next steps
 
-Discussed but not built: CSV/Excel payroll export, photo-based site and worker
-identity, clock-tampering detection, a demo-data button, missed-punch
-correction requests, overtime approval, end-of-shift reminders, iOS backup
+Discussed but not built: CSV/Excel payroll export (with payable hours),
+photo-based site and worker identity, a demo-data button, iOS backup
 exclusion for selfies and data.

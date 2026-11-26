@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import '../i18n/ui_text.dart';
 import '../models/attendance.dart';
 import '../models/project.dart';
+import '../models/requests.dart';
 import '../services/face_recognizer.dart';
 import '../services/location_service.dart';
 import '../services/speech_service.dart';
@@ -623,6 +625,35 @@ class _TodayTab extends StatelessWidget {
                   ),
                 ),
               ),
+            if (today.afterShift.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Card(
+                color: scheme.errorContainer,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(t(lang, T.afterShift), style: text.titleSmall),
+                      for (final (w, site) in today.afterShift)
+                        Text(
+                          '${w.name} · ${site.name} '
+                          '(${formatShiftTime(site.shiftEndMinutes)})',
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 8),
+            Text(t(lang, T.peopleToday), style: text.titleSmall),
+            for (final w in store.workersOf(projectId))
+              if (store.punchesFor(w.id, DateTime.now()).isNotEmpty)
+                _PersonRow(
+                  worker: w,
+                  day: store.workerDay(w.id, DateTime.now()),
+                  lang: lang,
+                ),
             if (today.notIn.isNotEmpty) ...[
               const SizedBox(height: 8),
               Text(t(lang, T.notIn), style: text.titleSmall),
@@ -640,6 +671,104 @@ class _TodayTab extends StatelessWidget {
       },
     );
   }
+}
+
+/// One worker's day on the dashboard: in and out times, how late, break,
+/// hours worked, and overtime with its approval state.
+class _PersonRow extends StatelessWidget {
+  const _PersonRow({
+    required this.worker,
+    required this.day,
+    required this.lang,
+  });
+
+  final Worker worker;
+  final WorkerDay day;
+  final String lang;
+
+  @override
+  Widget build(BuildContext context) {
+    final clock = DateFormat('HH:mm');
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final firstIn = day.firstIn;
+    final lastOut = day.lastOut;
+    final status = day.overtimeStatus;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              worker.role.isEmpty
+                  ? worker.name
+                  : '${worker.name} · ${worker.role}',
+              style: text.titleMedium,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${t(lang, T.inLabel)} '
+              '${firstIn == null ? '–' : clock.format(firstIn)} · '
+              '${t(lang, T.outLabel)} '
+              '${lastOut == null ? t(lang, T.stillIn) : clock.format(lastOut)}',
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: [
+                if (day.lateBy > Duration.zero)
+                  _Tag(
+                    t(
+                      lang,
+                      T.lateBy,
+                    ).replaceAll('{m}', '${day.lateBy.inMinutes}'),
+                    scheme.errorContainer,
+                  ),
+                _Tag(
+                  '${t(lang, T.breakTime)} ${formatHours(day.breaks)}',
+                  const Color(0xFFFFE0B2),
+                ),
+                _Tag(
+                  '${t(lang, T.workedToday)} ${formatHours(day.worked)}',
+                  scheme.primaryContainer,
+                ),
+                if (status != null)
+                  _Tag(
+                    '${t(lang, T.overtimeLabel)} ${formatHours(day.overtime)}'
+                    ' · ${t(lang, switch (status) {
+                      RequestStatus.pending => T.leavePending,
+                      RequestStatus.approved => T.leaveApproved,
+                      RequestStatus.rejected => T.leaveRejected,
+                    })}',
+                    scheme.tertiaryContainer,
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Tag extends StatelessWidget {
+  const _Tag(this.label, this.color);
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+    decoration: BoxDecoration(
+      color: color,
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Text(label, style: Theme.of(context).textTheme.labelMedium),
+  );
 }
 
 class _Figure extends StatelessWidget {

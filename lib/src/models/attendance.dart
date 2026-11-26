@@ -169,7 +169,16 @@ class Punch {
     required this.distanceMeters,
     this.auto = false,
     this.photo,
+    this.corrected = false,
+    this.clockSuspect = false,
   });
+
+  /// Added by a supervisor-approved correction, not punched live.
+  final bool corrected;
+
+  /// The phone's clock disagreed with the GPS time by more than a few
+  /// minutes when this punch was made: worth a supervisor's look.
+  final bool clockSuspect;
 
   /// File name of the small selfie taken at this punch, kept by
   /// `PunchPhotoStore`. Null for automatic punches and older records.
@@ -203,6 +212,8 @@ class Punch {
         'distance': distanceMeters,
         if (auto) 'auto': true,
         if (photo != null) 'photo': photo,
+        if (corrected) 'corrected': true,
+        if (clockSuspect) 'clockSuspect': true,
       };
 
   factory Punch.fromJson(Map<String, dynamic> json) => Punch(
@@ -218,6 +229,8 @@ class Punch {
         distanceMeters: (json['distance'] as num).toDouble(),
         auto: json['auto'] as bool? ?? false,
         photo: json['photo'] as String?,
+        corrected: json['corrected'] as bool? ?? false,
+        clockSuspect: json['clockSuspect'] as bool? ?? false,
       );
 }
 
