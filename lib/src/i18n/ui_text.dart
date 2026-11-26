@@ -175,6 +175,18 @@ enum T {
   noCorrections,
   replacedLabel,
   afterShift,
+  showOnMap,
+  checkOnMap,
+  mapNeedsInternet,
+  mapCircleHelp,
+  newLocation,
+  demoData,
+  loadDemo,
+  removeDemo,
+  loadDemoConfirm,
+  removeDemoConfirm,
+  demoLoaded,
+  demoRemoved,
 }
 
 /// Machine-written outside English — have a native speaker check before real
@@ -354,6 +366,21 @@ const _ui = <String, Map<T, String>>{
     T.noCorrections: 'No correction requests',
     T.replacedLabel: 'replaced',
     T.afterShift: 'Still in after shift end',
+    T.showOnMap: 'Map',
+    T.checkOnMap: 'Check on map',
+    T.mapNeedsInternet:
+        'The map needs internet. Everything else works offline.',
+    T.mapCircleHelp: 'The circle is the {m} m area where check-in works.',
+    T.newLocation: 'New location',
+    T.demoData: 'Demo data',
+    T.loadDemo: 'Load demo data',
+    T.removeDemo: 'Remove demo data',
+    T.loadDemoConfirm:
+        'Adds a demo project with two gates, five workers and a week of attendance. Your real data is not touched, and it can all be removed again.',
+    T.removeDemoConfirm:
+        'Removes the demo project, its workers and all their records. Your real data is not touched.',
+    T.demoLoaded: 'Demo data loaded',
+    T.demoRemoved: 'Demo data removed',
   },
   'hi': {
     T.startWorkBig: 'काम शुरू',

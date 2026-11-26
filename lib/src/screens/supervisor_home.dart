@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../demo/demo_data.dart';
 import '../i18n/ui_text.dart';
 import '../models/attendance.dart';
 import '../services/face_recognizer.dart';
@@ -47,6 +48,7 @@ class SupervisorHome extends StatelessWidget {
       appBar: AppBar(
         title: Text(t(lang, T.roleSupervisor)),
         actions: [
+          _DemoMenu(store: store),
           IconButton(
             tooltip: t(lang, T.switchRole),
             icon: const Icon(Icons.logout),
@@ -286,4 +288,59 @@ class _ApprovalTile extends StatelessWidget {
         trailing: const Icon(Icons.chevron_right),
         onTap: onTap,
       );
+}
+
+/// Loads or removes the demo week (see `demo_data.dart`), after a
+/// confirmation. Only reachable inside the supervisor's PIN session.
+class _DemoMenu extends StatelessWidget {
+  const _DemoMenu({required this.store});
+
+  final AttendanceStore store;
+
+  Future<void> _run(BuildContext context, {required bool load}) async {
+    final lang = store.languageCode;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(t(lang, load ? T.loadDemo : T.removeDemo)),
+        content: Text(t(lang, load ? T.loadDemoConfirm : T.removeDemoConfirm)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(t(lang, T.cancel)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(t(lang, load ? T.loadDemo : T.removeDemo)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    if (load) {
+      await loadDemoData(store);
+    } else {
+      await removeDemoData(store);
+    }
+    if (context.mounted) {
+      showSnack(context, t(lang, load ? T.demoLoaded : T.demoRemoved));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lang = store.languageCode;
+    final loaded = hasDemoData(store);
+    return PopupMenuButton<bool>(
+      tooltip: t(lang, T.demoData),
+      icon: const Icon(Icons.science_outlined),
+      onSelected: (load) => _run(context, load: load),
+      itemBuilder: (_) => [
+        if (!loaded)
+          PopupMenuItem(value: true, child: Text(t(lang, T.loadDemo)))
+        else
+          PopupMenuItem(value: false, child: Text(t(lang, T.removeDemo))),
+      ],
+    );
+  }
 }

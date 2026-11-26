@@ -55,12 +55,14 @@ lib/
                                  roles, locations + shifts, workers)
       punch_result_screen.dart   full-screen green success / red failure, photo thumb
       approvals_screens.dart     overtime + correction approvals; "Fix a missed punch" form
+      location_map.dart          OpenStreetMap preview of locations with the 50 m circle
+    demo/demo_data.dart          load / remove a tagged demo week (supervisor flask menu)
       shared_widgets.dart        runPunch(), WorkerCard, ClockCard, VoiceBar, formatHours
                                  + verify, enroll, workers, sites, calendar, leave,
                                  supervisor_pin (PIN dialogs)
 test/                            lock, shift flags, leave, roles, projects, punch
-                                 evidence + dashboard, approvals, reminders
-                                 (`flutter test`)
+                                 evidence + dashboard, approvals, reminders,
+                                 demo data, map (`flutter test`)
 assets/models/mobilefacenet.tflite   112×112 → 192-dim embedding
 _old_firebase_app/               the previous Firebase version, kept for reference
 ```
@@ -177,6 +179,14 @@ automatic check-out and the punch together (`recordPunch`).
   2 min earlier than the newest punch on the phone (clock set back). It is
   flagged `clockSuspect` (not refused) when the phone's clock differs from
   the GPS fix time by more than 5 min.
+- **Demo data is tagged and removable.** The supervisor's flask menu loads
+  project `demo-project` ("Al Wasl Tower (demo)"), sites `demo-site-a/b` in
+  Dubai, workers `demo-w1..5` with **no face data** (so no real face can
+  match them), and the last six working days plus today up to now —
+  generated through `planAt`/`recordPunch`, so auto check-outs and travel
+  are real. "Remove demo data" deletes exactly those ids and their records
+  (`removeRecordsOf`). Bulk writes use `AttendanceStore.batch`, which holds
+  every `_saveX` until the end.
 - **Shift-end reminders only on "My own phone"**: check-in / end of break
   schedules one for that location's shift end (if still ahead), check-out
   cancels it; gate phones never schedule. Inexact scheduling, so no
@@ -212,9 +222,15 @@ automatic check-out and the punch together (`recordPunch`).
   if the worker allowed notifications. Correction and overtime screens are
   English-only, like the other supervisor screens; the "Fix a missed punch"
   button and the reminder text are in all six languages.
+- **The location map is the app's only network use**, and only when a
+  supervisor opens it: OpenStreetMap tiles (identified as
+  `com.example.trust_punch`, credit shown as the licence requires). Fine
+  for a demo; OSM's tile policy does not allow heavy production use, so a
+  real deployment needs its own or a commercial tile provider. Offline it
+  shows a banner; nothing else depends on it.
 
 ## Possible next steps
 
 Discussed but not built: CSV/Excel payroll export (with payable hours),
-photo-based site and worker identity, a demo-data button, iOS backup
-exclusion for selfies and data.
+photo-based site and worker identity, iOS backup exclusion for selfies and
+data.

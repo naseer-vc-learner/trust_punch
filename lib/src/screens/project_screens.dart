@@ -9,6 +9,7 @@ import '../services/face_recognizer.dart';
 import '../services/location_service.dart';
 import '../services/speech_service.dart';
 import '../store/attendance_store.dart';
+import 'location_map.dart';
 import 'shared_widgets.dart' show SecondTicker, formatHours, showSnack;
 import 'workers_screen.dart' show registerWorkerFlow;
 
@@ -436,6 +437,23 @@ class _ProjectScreenState extends State<ProjectScreen> {
                           icon: const Icon(Icons.edit_location_alt_outlined),
                           label: Text(t(_lang, T.enterCoordinates)),
                         ),
+                        if (sites.isNotEmpty)
+                          OutlinedButton.icon(
+                            onPressed: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => LocationMapScreen(
+                                  title: project.name,
+                                  lang: _lang,
+                                  points: [
+                                    for (final s in sites)
+                                      MapPoint(s.name, s.latitude, s.longitude),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            icon: const Icon(Icons.map_outlined),
+                            label: Text(t(_lang, T.showOnMap)),
+                          ),
                       ],
                     ),
 
@@ -1053,6 +1071,24 @@ class _CoordinatesDialogState extends State<_CoordinatesDialog> {
     _lng.text = pair.$2;
   }
 
+  void _checkOnMap() {
+    final point = parseLatLng(_lat.text, _lng.text);
+    if (point == null) {
+      setState(() => _error = t(widget.lang, T.coordinatesInvalid));
+      return;
+    }
+    setState(() => _error = null);
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => LocationMapScreen(
+          title: t(widget.lang, T.newLocation),
+          lang: widget.lang,
+          points: [MapPoint(t(widget.lang, T.newLocation), point.$1, point.$2)],
+        ),
+      ),
+    );
+  }
+
   void _save() {
     final point = parseLatLng(_lat.text, _lng.text);
     if (point == null) {
@@ -1107,6 +1143,12 @@ class _CoordinatesDialogState extends State<_CoordinatesDialog> {
         ],
       ),
       actions: [
+        // See the point (and its check-in circle) before saving it.
+        TextButton.icon(
+          onPressed: _checkOnMap,
+          icon: const Icon(Icons.map_outlined),
+          label: Text(t(lang, T.checkOnMap)),
+        ),
         TextButton(
           onPressed: () => Navigator.pop(context),
           child: Text(t(lang, T.cancel)),
