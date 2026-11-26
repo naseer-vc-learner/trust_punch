@@ -31,6 +31,7 @@ lib/
   src/
     models/attendance.dart       Worker, Site, Punch, WorkerStatus, cosineSimilarity
     models/leave.dart            LeaveRequest (annual/sick/unpaid; pending/approved/rejected)
+    models/project.dart          Project (jobs = activities, roles); Site carries projectId + shift
     store/attendance_store.dart  all state + persistence + hours/break/flag maths
     i18n/phrases.dart            spoken lines + language list
     i18n/ui_text.dart            on-screen text (enum T), isRtl()
@@ -46,11 +47,12 @@ lib/
       role_root.dart             role picker + which home to show; supervisor idle lock
       worker_home.dart           "My own phone" (1:1): next-action button, my calendar/leave
       kiosk_home.dart            "Gate phone" (1:N): scan face, request leave, today's list
-      supervisor_home.dart       on-site board, leave approvals, calendar, workers, sites
+      supervisor_home.dart       on-site board, leave approvals, calendar, workers, projects
+      project_screens.dart       projects → jobs, roles, locations + shifts, workers
       shared_widgets.dart        runPunch(), WorkerCard, ClockCard, VoiceBar, formatHours
                                  + verify, enroll, workers, sites, calendar, leave,
                                  supervisor_pin (PIN dialogs)
-test/                            lock, shift flags, leave, roles (`flutter test`)
+test/                            lock, shift flags, leave, roles, projects (`flutter test`)
 assets/models/mobilefacenet.tflite   112×112 → 192-dim embedding
 _old_firebase_app/               the previous Firebase version, kept for reference
 ```
@@ -62,9 +64,12 @@ failure: device not jailbroken → GPS fix is real, precise to ±30 m, and
 within 50 m of a known site → liveness challenge passed → face matches
 someone enrolled.
 
-Then `allowedActions()` decides what is legal next. If only one action is
-possible it happens without asking; only a worker already on the clock is
-offered a choice (finish vs break).
+It also refuses a worker at another project's location (`canPunchAt`).
+Then `planAt(worker, site)` decides what is legal next, and any automatic
+check-out to record first. If only one action is possible it happens without
+asking; only a worker already on the clock at this location is offered a
+choice (finish vs break). `runPunch()` plans again at save time and writes the
+automatic check-out and the punch together (`recordPunch`).
 
 ## Decisions worth not re-litigating
 
@@ -107,8 +112,22 @@ offered a choice (finish vs break).
   not contained in it.
 - **A session left open on a past day stops accruing.** Only today keeps
   counting, or a forgotten check-out would add whole days.
-- **Check-out is pinned to the site the session opened at**, so hours cannot
-  land against a site nobody worked.
+- **Projects own locations and workers.** A worker is on one project with a
+  role and a job (activity), and may punch at any of its locations, no other.
+  Sites and workers from before projects existed are moved into "General"
+  on first load (`generalProjectId`). A project with locations or workers
+  can't be deleted.
+- **Moving location without checking out closes the old one automatically**
+  (replaces the old "check-out is pinned to its site" rule). The close time
+  is the new check-in minus estimated travel (straight-line distance at
+  30 km/h), never before the last punch there. The gap is shown as Travel,
+  not counted as work; the punch is marked `auto` and the day gets an
+  "Auto check-out" flag for the supervisor.
+- **A session left open on an earlier day is closed at that location's
+  shift end** when the worker next checks in, instead of accruing.
+- **Each location has its own shift** (default 09:00–17:00). Late = first
+  check-in of the day after that location's start + 10 min. Overtime/short
+  stay against a fixed 8 h day across all locations.
 
 ## Known limits (matters before this is used for real)
 
@@ -127,8 +146,11 @@ offered a choice (finish vs break).
   angles help; a true profile will not match.
 - **Team mode (1:N) is inherently riskier than individual mode (1:1)** — every
   extra worker is another chance to be the closest match by accident.
-- Shift rules are hardcoded: 09:00 start, 10 min grace, 8 h day
-  (`attendance_store.dart`).
+- Grace (10 min), the 8 h day and the 30 km/h travel speed are constants in
+  `attendance_store.dart`. Overnight shifts (end before start) are refused.
+- **Travel is an estimate**: straight-line distance ignores roads, so real
+  journeys are longer; the auto check-out time is shown as estimated.
+- **Project screens are English-only**, like the other supervisor screens.
 - **Supervisor screens are English-only** (PIN dialogs, delete-all); `t()`
   falls back to English. Worker-facing text is in all six languages.
 - **The PIN lock stops casual misuse, not a rooted phone**: the hash and all

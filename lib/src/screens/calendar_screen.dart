@@ -188,6 +188,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
         }
         final flags = widget.store.flagsFor(worker.id, _selected);
         final bySite = widget.store.workedBySiteOn(worker.id, _selected);
+        final travel = widget.store.travelOn(worker.id, _selected);
         return Card(
           child: ListTile(
             leading: CircleAvatar(child: Text(worker.name.characters.first)),
@@ -201,9 +202,12 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 if (flags.late) t(lang, T.lateFlag),
                 if (flags.overtime) t(lang, T.overtimeFlag),
                 if (flags.short) t(lang, T.shortFlag),
+                if (flags.autoCheckout) t(lang, T.autoCheckoutFlag),
               ].join(' · '),
               if (bySite.isNotEmpty)
                 '${t(lang, T.hoursBySite)}: ${formatBySite(bySite)}',
+              if (travel > Duration.zero)
+                '${t(lang, T.travel)}: ${formatHours(travel)}',
             ].join('\n')),
             trailing: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -230,15 +234,21 @@ class _CalendarScreenState extends State<CalendarScreen> {
               PunchType.breakEnd => Icons.work_outline,
             }),
             title: Text('${punch.workerName} · ${punch.siteName}'),
-            subtitle: Text(t(
-              widget.store.languageCode,
-              switch (punch.type) {
-                PunchType.checkIn => T.checkInLabel,
-                PunchType.checkOut => T.checkOutLabel,
-                PunchType.breakStart => T.takeBreak,
-                PunchType.breakEnd => T.endBreak,
-              },
-            )),
+            subtitle: Text([
+              t(
+                widget.store.languageCode,
+                switch (punch.type) {
+                  PunchType.checkIn => T.checkInLabel,
+                  PunchType.checkOut => T.checkOutLabel,
+                  PunchType.breakStart => T.takeBreak,
+                  PunchType.breakEnd => T.endBreak,
+                },
+              ),
+              // Recorded by the app when the worker moved on without
+              // checking out; the time is an estimate.
+              if (punch.auto)
+                t(widget.store.languageCode, T.autoCheckoutFlag),
+            ].join(' · ')),
             trailing: Text(_clock.format(punch.at)),
           ),
         ),

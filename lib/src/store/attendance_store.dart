@@ -5,13 +5,31 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/attendance.dart';
 import '../models/leave.dart';
+import '../models/project.dart';
+import '../services/location_service.dart' show haversineMeters;
 
-/// Standard day. Anything past this is overtime.
+/// Standard day, whatever the locations' shifts: anything past this is
+/// overtime (the UAE limit is 8 hours a day).
 const standardDay = Duration(hours: 8);
 
-/// Shift start, and how late counts as late.
-const shiftStartHour = 9;
+/// How late after a location's shift start still counts as on time.
 const lateGrace = Duration(minutes: 10);
+
+/// Assumed speed between two locations of a project, for estimating travel
+/// when a worker moves without checking out: 30 km/h, city traffic.
+const travelSpeedMetersPerSecond = 30000 / 3600;
+
+/// What a worker may do next at one location, and anything the app has to
+/// record first to make it legal.
+class PunchPlan {
+  const PunchPlan({required this.actions, this.autoClose});
+
+  final List<PunchType> actions;
+
+  /// A check-out the app adds before the worker's own punch: it closes a
+  /// session left open at another location, or on an earlier day.
+  final Punch? autoClose;
+}
 
 /// Who is using the phone, and so which home screen they get.
 ///
@@ -29,6 +47,7 @@ class AttendanceStore extends ChangeNotifier {
     this._sites,
     this._workers,
     this._leaves,
+    this._projects,
     this._languageCode,
     this._lastRole,
     this._activeWorkerId,
@@ -38,6 +57,7 @@ class AttendanceStore extends ChangeNotifier {
   static const _sitesKey = 'sites';
   static const _workersKey = 'workers';
   static const _leavesKey = 'leaves';
+  static const _projectsKey = 'projects';
   static const _languageKey = 'language';
   static const _roleKey = 'role';
   static const _activeWorkerKey = 'activeWorker';
@@ -47,6 +67,7 @@ class AttendanceStore extends ChangeNotifier {
   final List<Site> _sites;
   final List<Worker> _workers;
   final List<LeaveRequest> _leaves;
+  final List<Project> _projects;
   String _languageCode;
   AppRole? _lastRole;
   String? _activeWorkerId;
@@ -58,11 +79,11 @@ class AttendanceStore extends ChangeNotifier {
         .map((e) => Punch.fromJson(jsonDecode(e) as Map<String, dynamic>))
         .toList();
 
-    final sites = (prefs.getStringList(_sitesKey) ?? const <String>[])
+    var sites = (prefs.getStringList(_sitesKey) ?? const <String>[])
         .map((e) => Site.fromJson(jsonDecode(e) as Map<String, dynamic>))
         .toList();
 
-    final workers = (prefs.getStringList(_workersKey) ?? const <String>[])
+    var workers = (prefs.getStringList(_workersKey) ?? const <String>[])
         .map((e) => Worker.fromJson(jsonDecode(e) as Map<String, dynamic>))
         .toList();
 
@@ -71,12 +92,41 @@ class AttendanceStore extends ChangeNotifier {
             LeaveRequest.fromJson(jsonDecode(e) as Map<String, dynamic>))
         .toList();
 
+    final projects = (prefs.getStringList(_projectsKey) ?? const <String>[])
+        .map((e) => Project.fromJson(jsonDecode(e) as Map<String, dynamic>))
+        .toList();
+
+    // Sites and workers saved before projects existed belong to no project,
+    // and so could never punch. They move into "General" once, and are saved
+    // back, so nothing recorded before is lost.
+    if (sites.any((s) => s.projectId.isEmpty) ||
+        workers.any((w) => w.projectId.isEmpty)) {
+      if (!projects.any((p) => p.id == generalProjectId)) {
+        projects.add(const Project(id: generalProjectId, name: 'General'));
+      }
+      sites = [
+        for (final s in sites)
+          s.projectId.isEmpty ? s.copyWith(projectId: generalProjectId) : s,
+      ];
+      workers = [
+        for (final w in workers)
+          w.projectId.isEmpty ? w.copyWith(projectId: generalProjectId) : w,
+      ];
+      await prefs.setStringList(
+          _projectsKey, [for (final p in projects) jsonEncode(p.toJson())]);
+      await prefs.setStringList(
+          _sitesKey, [for (final s in sites) jsonEncode(s.toJson())]);
+      await prefs.setStringList(
+          _workersKey, [for (final w in workers) jsonEncode(w.toJson())]);
+    }
+
     return AttendanceStore._(
       prefs,
       punches,
       sites,
       workers,
       leaves,
+      projects,
       prefs.getString(_languageKey) ?? 'en',
       _parseRole(prefs.getString(_roleKey)),
       prefs.getString(_activeWorkerKey),
@@ -93,7 +143,28 @@ class AttendanceStore extends ChangeNotifier {
 
   List<Site> get sites => List.unmodifiable(_sites);
   List<Worker> get workers => List.unmodifiable(_workers);
+  List<Project> get projects => List.unmodifiable(_projects);
   String get languageCode => _languageCode;
+
+  Site? siteById(String id) {
+    for (final site in _sites) {
+      if (site.id == id) return site;
+    }
+    return null;
+  }
+
+  Project? projectById(String id) {
+    for (final project in _projects) {
+      if (project.id == id) return project;
+    }
+    return null;
+  }
+
+  List<Site> sitesOf(String projectId) =>
+      _sites.where((s) => s.projectId == projectId).toList(growable: false);
+
+  List<Worker> workersOf(String projectId) =>
+      _workers.where((w) => w.projectId == projectId).toList(growable: false);
 
   /// The role the phone reopens in; null means show the role picker.
   AppRole? get lastRole => _lastRole;
@@ -149,25 +220,84 @@ class AttendanceStore extends ChangeNotifier {
         _ => WorkerStatus.off,
       };
 
-  /// The punches that make sense next. This is the duplicate guard: anything
-  /// not on this list would be a second check-in, a break inside a break, and
-  /// so on.
-  List<PunchType> allowedActions(String workerId) =>
-      switch (statusOf(workerId)) {
-        WorkerStatus.off => const [PunchType.checkIn],
-        WorkerStatus.working => const [PunchType.checkOut, PunchType.breakStart],
-        WorkerStatus.onBreak => const [PunchType.breakEnd],
-      };
+  /// Whether [worker] may punch at [site]: only at their own project's
+  /// locations, so hours can never land on a project they are not on.
+  bool canPunchAt(Worker worker, Site site) =>
+      worker.projectId.isNotEmpty && worker.projectId == site.projectId;
 
-  /// The site of the session currently open, so a check-out closes where it
-  /// opened even on a day spanning several sites.
-  Site? openSiteFor(String workerId) {
+  /// What [workerId] may do next at [site], at time [now].
+  ///
+  /// This is the duplicate guard (no second check-in, no break inside a
+  /// break) and the multi-location rule:
+  /// - nothing open: check in;
+  /// - open here, today: check out or break (or end the break);
+  /// - open at another location: check in here, and the other location is
+  ///   closed first by [PunchPlan.autoClose], at this check-in minus the
+  ///   estimated travel time, never before the worker's last punch there;
+  /// - left open on an earlier day: closed at that location's shift end that
+  ///   day, then check in, so a forgotten check-out never adds whole nights.
+  PunchPlan planAt(String workerId, Site site, {DateTime? now}) {
+    final at = now ?? DateTime.now();
     final last = lastPunchFor(workerId);
-    if (last == null || last.type == PunchType.checkOut) return null;
-    for (final site in _sites) {
-      if (site.id == last.siteId) return site;
+    if (last == null || last.type == PunchType.checkOut) {
+      return const PunchPlan(actions: [PunchType.checkIn]);
     }
-    return null;
+
+    final openSite = siteById(last.siteId);
+    final earlierDay = !_isSameDay(last.at, at);
+    if (!earlierDay && last.siteId == site.id) {
+      return PunchPlan(
+        actions: statusOf(workerId) == WorkerStatus.onBreak
+            ? const [PunchType.breakEnd]
+            : const [PunchType.checkOut, PunchType.breakStart],
+      );
+    }
+
+    final DateTime closeAt;
+    if (earlierDay) {
+      final shiftEnd = openSite?.shiftEndOn(last.at);
+      closeAt = shiftEnd == null || shiftEnd.isBefore(last.at)
+          ? last.at
+          : shiftEnd;
+    } else {
+      final travel = openSite == null ? Duration.zero : travelBetween(openSite, site);
+      final estimate = at.subtract(travel);
+      closeAt = estimate.isBefore(last.at) ? last.at : estimate;
+    }
+
+    return PunchPlan(
+      actions: const [PunchType.checkIn],
+      autoClose: Punch(
+        type: PunchType.checkOut,
+        at: closeAt,
+        workerId: last.workerId,
+        employeeId: last.employeeId,
+        workerName: last.workerName,
+        siteId: last.siteId,
+        siteName: last.siteName,
+        latitude: openSite?.latitude ?? last.latitude,
+        longitude: openSite?.longitude ?? last.longitude,
+        distanceMeters: 0,
+        auto: true,
+      ),
+    );
+  }
+
+  /// Estimated travel time between two locations: straight-line distance at
+  /// [travelSpeedMetersPerSecond]. An estimate, shown as such.
+  static Duration travelBetween(Site from, Site to) {
+    final meters = haversineMeters(
+        from.latitude, from.longitude, to.latitude, to.longitude);
+    return Duration(seconds: (meters / travelSpeedMetersPerSecond).round());
+  }
+
+  /// Saves the worker's own [punch], after any check-out [plan] needs first,
+  /// as one write.
+  Future<void> recordPunch(PunchPlan plan, Punch punch) async {
+    final auto = plan.autoClose;
+    if (auto != null) _punches.add(auto);
+    _punches.add(punch);
+    await _savePunches();
   }
 
   /// Time on the clock minus time on break.
@@ -235,6 +365,25 @@ class AttendanceStore extends ChangeNotifier {
     return result;
   }
 
+  /// Time between leaving one location and checking in at another on [day]:
+  /// travel, not work, and not paid as hours at either location.
+  Duration travelOn(String workerId, DateTime day) {
+    var total = Duration.zero;
+    Punch? lastOut;
+    for (final punch in punchesFor(workerId, day)) {
+      if (punch.type == PunchType.checkOut) {
+        lastOut = punch;
+      } else if (punch.type == PunchType.checkIn) {
+        final out = lastOut;
+        if (out != null && out.siteId != punch.siteId) {
+          total += punch.at.difference(out.at);
+        }
+        lastOut = null;
+      }
+    }
+    return total;
+  }
+
   // ------------------------------------------------------------- shift rules
 
   /// Flags a supervisor cares about, derived rather than stored.
@@ -246,7 +395,11 @@ class AttendanceStore extends ChangeNotifier {
       (p) => p.type == PunchType.checkIn,
       orElse: () => punches.first,
     );
-    final shiftStart = DateTime(day.year, day.month, day.day, shiftStartHour);
+    // Late is judged against the shift of the location the day started at.
+    final firstSite = siteById(firstIn.siteId);
+    final shiftStart = firstSite?.shiftStartOn(day) ??
+        DateTime(day.year, day.month, day.day)
+            .add(const Duration(minutes: Site.defaultShiftStart));
     final worked = workedOn(workerId, day);
 
     // A day is judged short once it is over: either it ended in a check-out,
@@ -260,6 +413,7 @@ class AttendanceStore extends ChangeNotifier {
       late: firstIn.at.isAfter(shiftStart.add(lateGrace)),
       overtime: worked > standardDay,
       short: dayOver && worked < standardDay,
+      autoCheckout: punches.any((p) => p.auto),
     );
   }
 
@@ -302,6 +456,10 @@ class AttendanceStore extends ChangeNotifier {
 
   Future<void> add(Punch punch) async {
     _punches.add(punch);
+    await _savePunches();
+  }
+
+  Future<void> _savePunches() async {
     await _prefs.setStringList(
       _punchesKey,
       _punches.map((p) => jsonEncode(p.toJson())).toList(),
@@ -311,6 +469,21 @@ class AttendanceStore extends ChangeNotifier {
 
   Future<void> addWorker(Worker worker) async {
     _workers.add(worker);
+    await _saveWorkers();
+  }
+
+  /// Puts [workerId] on [projectId] with a role and job. Moving to another
+  /// project is allowed; hours already recorded stay where they were worked.
+  Future<void> assignWorker(
+    String workerId, {
+    required String projectId,
+    required String role,
+    required String job,
+  }) async {
+    final i = _workers.indexWhere((w) => w.id == workerId);
+    if (i < 0) return;
+    _workers[i] =
+        _workers[i].copyWith(projectId: projectId, role: role, job: job);
     await _saveWorkers();
   }
 
@@ -335,6 +508,56 @@ class AttendanceStore extends ChangeNotifier {
   Future<void> removeSite(String id) async {
     _sites.removeWhere((s) => s.id == id);
     await _saveSites();
+  }
+
+  /// Changes a location's shift. Throws [ArgumentError] when it would end
+  /// before it starts (overnight shifts are not supported yet).
+  Future<void> setShift(String siteId, int startMinutes, int endMinutes) async {
+    if (endMinutes <= startMinutes) {
+      throw ArgumentError('Shift must end after it starts');
+    }
+    final i = _sites.indexWhere((s) => s.id == siteId);
+    if (i < 0) return;
+    _sites[i] = _sites[i]
+        .copyWith(shiftStartMinutes: startMinutes, shiftEndMinutes: endMinutes);
+    await _saveSites();
+  }
+
+  // ---------------------------------------------------------------- projects
+
+  Future<Project> addProject(String name) async {
+    final project = Project(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      name: name.trim(),
+    );
+    _projects.add(project);
+    await _saveProjects();
+    return project;
+  }
+
+  /// Replaces a project's name, jobs or roles.
+  Future<void> updateProject(Project project) async {
+    final i = _projects.indexWhere((p) => p.id == project.id);
+    if (i < 0) return;
+    _projects[i] = project;
+    await _saveProjects();
+  }
+
+  /// Deletes a project, but only an empty one: removing a project that still
+  /// has locations or workers would strand them where nobody can punch.
+  Future<bool> removeProject(String id) async {
+    if (sitesOf(id).isNotEmpty || workersOf(id).isNotEmpty) return false;
+    _projects.removeWhere((p) => p.id == id);
+    await _saveProjects();
+    return true;
+  }
+
+  Future<void> _saveProjects() async {
+    await _prefs.setStringList(
+      _projectsKey,
+      _projects.map((p) => jsonEncode(p.toJson())).toList(),
+    );
+    notifyListeners();
   }
 
   Future<void> _saveSites() async {
@@ -467,11 +690,20 @@ class AttendanceStore extends ChangeNotifier {
 }
 
 class ShiftFlags {
-  const ShiftFlags({this.late = false, this.overtime = false, this.short = false});
+  const ShiftFlags({
+    this.late = false,
+    this.overtime = false,
+    this.short = false,
+    this.autoCheckout = false,
+  });
 
   final bool late;
   final bool overtime;
   final bool short;
 
-  bool get any => late || overtime || short;
+  /// The app closed a session for this worker that day (they moved location
+  /// or forgot to check out). Worth a supervisor's look.
+  final bool autoCheckout;
+
+  bool get any => late || overtime || short || autoCheckout;
 }

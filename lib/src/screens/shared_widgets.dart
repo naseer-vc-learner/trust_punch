@@ -64,34 +64,46 @@ Future<void> runPunch(
   );
   if (intent == null || !context.mounted) return;
 
-  // Re-checked after the camera round trip: the worker's state could have
-  // moved on while the verify screen was open.
-  if (!store.allowedActions(intent.worker.id).contains(intent.type)) {
+  // Planned again after the camera round trip: the worker's state could have
+  // moved on while the verify screen was open, and the travel estimate for
+  // an automatic check-out must use the moment the punch is saved.
+  final now = DateTime.now();
+  final plan = store.planAt(intent.worker.id, intent.site, now: now);
+  if (!plan.actions.contains(intent.type)) {
     showSnack(context, t(lang, T.tryAgain));
     return;
   }
 
-  await store.add(Punch(
-    type: intent.type,
-    at: DateTime.now(),
-    workerId: intent.worker.id,
-    employeeId: intent.worker.employeeId,
-    workerName: intent.worker.name,
-    siteId: intent.site.id,
-    siteName: intent.site.name,
-    latitude: intent.latitude,
-    longitude: intent.longitude,
-    distanceMeters: intent.distanceMeters,
-  ));
+  await store.recordPunch(
+    plan,
+    Punch(
+      type: intent.type,
+      at: now,
+      workerId: intent.worker.id,
+      employeeId: intent.worker.employeeId,
+      workerName: intent.worker.name,
+      siteId: intent.site.id,
+      siteName: intent.site.name,
+      latitude: intent.latitude,
+      longitude: intent.longitude,
+      distanceMeters: intent.distanceMeters,
+    ),
+  );
   if (!context.mounted) return;
 
   speech.say(switch (intent.type) {
     PunchType.checkIn || PunchType.breakEnd => Phrase.workStarted,
     PunchType.checkOut || PunchType.breakStart => Phrase.workFinished,
   });
+  final clock = DateFormat('HH:mm');
+  final auto = plan.autoClose;
   showSnack(
     context,
-    '${intent.worker.name} · ${DateFormat('HH:mm').format(DateTime.now())}',
+    auto == null
+        ? '${intent.worker.name} · ${clock.format(now)}'
+        : '${intent.worker.name} · ${intent.site.name} ${clock.format(now)}\n'
+            '${t(lang, T.autoCheckedOut).replaceAll('{site}', auto.siteName)} '
+            '${clock.format(auto.at)}',
   );
 }
 
@@ -224,6 +236,13 @@ class WorkerCard extends StatelessWidget {
     final bySite = store.workedBySiteOn(worker.id, today);
     final onLeave = store.leaveOn(worker.id, today) != null;
     final flags = store.flagsFor(worker.id, today);
+    final travel = store.travelOn(worker.id, today);
+    final project = store.projectById(worker.projectId);
+    final assignment = [
+      if (worker.role.isNotEmpty) worker.role,
+      if (worker.job.isNotEmpty) worker.job,
+      if (project != null) project.name,
+    ].join(' · ');
 
     final scheme = Theme.of(context).colorScheme;
     final (color, icon, label) = switch (status) {
@@ -264,6 +283,9 @@ class WorkerCard extends StatelessWidget {
                       if (worker.employeeId.isNotEmpty)
                         Text(worker.employeeId,
                             style: Theme.of(context).textTheme.bodySmall),
+                      if (assignment.isNotEmpty)
+                        Text(assignment,
+                            style: Theme.of(context).textTheme.bodySmall),
                     ],
                   ),
                 ),
@@ -298,10 +320,26 @@ class WorkerCard extends StatelessWidget {
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
+            // Time between leaving one location and arriving at the next:
+            // shown, but not counted in the hours above.
+            if (travel > Duration.zero) ...[
+              const SizedBox(height: 4),
+              Text(
+                '${t(lang, T.travel)}: ${formatHours(travel)}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
             const SizedBox(height: 12),
             Wrap(
               spacing: 6,
               children: [
+                if (flags.autoCheckout)
+                  Chip(
+                    avatar: const Icon(Icons.swap_horiz, size: 18),
+                    label: Text(t(lang, T.autoCheckoutFlag)),
+                    backgroundColor: scheme.secondaryContainer,
+                    visualDensity: VisualDensity.compact,
+                  ),
                 // "Not working" says nothing new beside "On leave"; but a
                 // worker on leave who clocked in anyway keeps both chips.
                 if (!(onLeave && status == WorkerStatus.off))

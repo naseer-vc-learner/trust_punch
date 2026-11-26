@@ -207,15 +207,16 @@ class _VerifyScreenState extends State<VerifyScreen> {
       }
       _worker = match.worker;
 
-      // An open session has to close at the site it opened at, or the hours
-      // land against a site the person never worked.
-      final open = widget.store.openSiteFor(match.worker.id);
-      if (open != null && open.id != _site!.id) {
-        _block('${match.worker.name}: ${open.name}', Phrase.tooFar);
+      // Hours may only land on the worker's own project.
+      if (!widget.store.canPunchAt(match.worker, _site!)) {
+        _block('${match.worker.name}: ${t(_lang, T.notYourSite)}',
+            Phrase.tooFar);
         return;
       }
 
-      final actions = widget.store.allowedActions(match.worker.id);
+      // Checked in elsewhere? The plan closes that location first (see
+      // AttendanceStore.planAt), so the only move here is a check-in.
+      final actions = widget.store.planAt(match.worker.id, _site!).actions;
       if (actions.length == 1) {
         _finish(actions.first);
         return;

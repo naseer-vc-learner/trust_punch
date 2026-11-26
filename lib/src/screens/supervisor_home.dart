@@ -9,7 +9,7 @@ import '../store/attendance_store.dart';
 import 'calendar_screen.dart';
 import 'leave_screen.dart';
 import 'shared_widgets.dart';
-import 'sites_screen.dart';
+import 'project_screens.dart';
 import 'workers_screen.dart';
 
 /// Everything that is not punching: who is on site now, leave waiting for a
@@ -107,11 +107,21 @@ class SupervisorHome extends StatelessWidget {
                   ),
                   const Divider(height: 1),
                   ListTile(
-                    leading: const Icon(Icons.business),
-                    title: Text(t(lang, T.workSites)),
-                    subtitle: Text('${store.sites.length}'),
+                    leading: const Icon(Icons.apartment),
+                    title: Text(t(lang, T.projects)),
+                    subtitle: Text(
+                      '${store.projects.length} · '
+                      '${store.sites.length} ${t(lang, T.workSites).toLowerCase()}',
+                    ),
                     trailing: const Icon(Icons.chevron_right),
-                    onTap: () => _open(context, SitesScreen(store: store)),
+                    onTap: () => _open(
+                      context,
+                      ProjectsScreen(
+                        store: store,
+                        recognizer: recognizer,
+                        speech: speech,
+                      ),
+                    ),
                   ),
                 ],
               ),
