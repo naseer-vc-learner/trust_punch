@@ -198,6 +198,33 @@ class _ProjectScreenState extends State<ProjectScreen> {
     }
   }
 
+  /// Adds a location from typed coordinates, for a site the supervisor is
+  /// not standing at. Same name and shift steps as adding by GPS.
+  Future<void> _addLocationByCoordinates() async {
+    final name = await askText(
+      context,
+      title: t(_lang, T.nameThisSite),
+      label: t(_lang, T.name),
+      saveLabel: t(_lang, T.save),
+      cancelLabel: t(_lang, T.cancel),
+    );
+    if (name == null || !mounted) return;
+    final point = await askCoordinates(context, lang: _lang);
+    if (point == null || !mounted) return;
+    final shift = await askShift(context, lang: _lang);
+    if (shift == null || !mounted) return;
+
+    await _store.addSite(Site(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      name: name,
+      latitude: point.$1,
+      longitude: point.$2,
+      projectId: widget.projectId,
+      shiftStartMinutes: shift.$1,
+      shiftEndMinutes: shift.$2,
+    ));
+  }
+
   Future<void> _editShift(Site site) async {
     final shift = await askShift(
       context,
@@ -333,8 +360,11 @@ class _ProjectScreenState extends State<ProjectScreen> {
                     subtitle: Text(
                       '${t(_lang, T.shift)} '
                       '${formatShiftTime(site.shiftStartMinutes)}–'
-                      '${formatShiftTime(site.shiftEndMinutes)}',
+                      '${formatShiftTime(site.shiftEndMinutes)}\n'
+                      '${site.latitude.toStringAsFixed(5)}, '
+                      '${site.longitude.toStringAsFixed(5)}',
                     ),
+                    isThreeLine: true,
                     onTap: () => _editShift(site),
                     trailing: IconButton(
                       tooltip: t(_lang, T.delete),
@@ -343,16 +373,26 @@ class _ProjectScreenState extends State<ProjectScreen> {
                     ),
                   ),
                 ),
-              OutlinedButton.icon(
-                onPressed: _locating ? null : _addLocation,
-                icon: _locating
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.add_location_alt),
-                label: Text(t(_lang, T.addCurrentLocation)),
+              Wrap(
+                spacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: _locating ? null : _addLocation,
+                    icon: _locating
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.add_location_alt),
+                    label: Text(t(_lang, T.addCurrentLocation)),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _locating ? null : _addLocationByCoordinates,
+                    icon: const Icon(Icons.edit_location_alt_outlined),
+                    label: Text(t(_lang, T.enterCoordinates)),
+                  ),
+                ],
               ),
 
               // 3. Workers, each with a role and a job.
@@ -619,6 +659,106 @@ class _ShiftDialogState extends State<_ShiftDialog> {
           FilledButton(onPressed: _save, child: Text(t(widget.lang, T.save))),
         ],
       );
+}
+
+/// Asks for (latitude, longitude) in decimal degrees; null when cancelled.
+/// A pair pasted into the latitude field ("25.2048, 55.2708") is split
+/// across both fields.
+Future<(double, double)?> askCoordinates(
+  BuildContext context, {
+  required String lang,
+}) =>
+    showDialog<(double, double)>(
+      context: context,
+      builder: (_) => _CoordinatesDialog(lang: lang),
+    );
+
+class _CoordinatesDialog extends StatefulWidget {
+  const _CoordinatesDialog({required this.lang});
+
+  final String lang;
+
+  @override
+  State<_CoordinatesDialog> createState() => _CoordinatesDialogState();
+}
+
+class _CoordinatesDialogState extends State<_CoordinatesDialog> {
+  final _lat = TextEditingController();
+  final _lng = TextEditingController();
+  String? _error;
+
+  @override
+  void dispose() {
+    _lat.dispose();
+    _lng.dispose();
+    super.dispose();
+  }
+
+  void _onLatitudeChanged(String text) {
+    final pair = splitLatLngPair(text);
+    if (pair == null) return;
+    _lat.text = pair.$1;
+    _lng.text = pair.$2;
+  }
+
+  void _save() {
+    final point = parseLatLng(_lat.text, _lng.text);
+    if (point == null) {
+      setState(() => _error = t(widget.lang, T.coordinatesInvalid));
+      return;
+    }
+    Navigator.pop(context, point);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lang = widget.lang;
+    const keyboard =
+        TextInputType.numberWithOptions(decimal: true, signed: true);
+    return AlertDialog(
+      title: Text(t(lang, T.enterCoordinates)),
+      scrollable: true,
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(t(lang, T.coordinatesHelp),
+              style: Theme.of(context).textTheme.bodySmall),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _lat,
+            autofocus: true,
+            // Not the numeric keyboard: it could not take a pasted pair.
+            keyboardType: TextInputType.text,
+            decoration: InputDecoration(
+              labelText: t(lang, T.latitude),
+              hintText: '25.2048',
+            ),
+            onChanged: _onLatitudeChanged,
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _lng,
+            keyboardType: keyboard,
+            decoration: InputDecoration(
+              labelText: t(lang, T.longitude),
+              hintText: '55.2708',
+              errorText: _error,
+              errorMaxLines: 2,
+            ),
+            onSubmitted: (_) => _save(),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text(t(lang, T.cancel)),
+        ),
+        FilledButton(onPressed: _save, child: Text(t(lang, T.save))),
+      ],
+    );
+  }
 }
 
 /// Asks for a worker's (role, job) on [project]; null when cancelled.

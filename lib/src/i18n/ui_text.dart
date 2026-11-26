@@ -142,6 +142,11 @@ enum T {
   shiftEndBeforeStart,
   noLocationsYet,
   noneYet,
+  enterCoordinates,
+  latitude,
+  longitude,
+  coordinatesInvalid,
+  coordinatesHelp,
 }
 
 /// Machine-written outside English — have a native speaker check before real
@@ -284,6 +289,14 @@ const _ui = <String, Map<T, String>>{
     T.shiftEndBeforeStart: 'The shift must end after it starts',
     T.noLocationsYet: 'No locations yet. Stand at the site and add it.',
     T.noneYet: 'None yet',
+    T.enterCoordinates: 'Enter coordinates',
+    T.latitude: 'Latitude',
+    T.longitude: 'Longitude',
+    T.coordinatesInvalid:
+        'Use decimal degrees: latitude −90 to 90, longitude −180 to 180',
+    T.coordinatesHelp:
+        'Paste "lat, long" from a map app. Check the point first: check-in '
+            'works only within 50 m of it.',
   },
   'hi': {
     T.startWorkBig: 'काम शुरू',

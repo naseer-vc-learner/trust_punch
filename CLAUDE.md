@@ -151,6 +151,10 @@ automatic check-out and the punch together (`recordPunch`).
 - **Travel is an estimate**: straight-line distance ignores roads, so real
   journeys are longer; the auto check-out time is shown as estimated.
 - **Project screens are English-only**, like the other supervisor screens.
+- **Locations can be added by typed coordinates** (supervisor only, range
+  checked; a "lat, long" pair pasted from a map app is split). They skip the
+  30 m GPS check, so a typo puts the 50 m circle in the wrong place — the
+  coordinates show under each location to check against a map.
 - **Supervisor screens are English-only** (PIN dialogs, delete-all); `t()`
   falls back to English. Worker-facing text is in all six languages.
 - **The PIN lock stops casual misuse, not a rooted phone**: the hash and all
