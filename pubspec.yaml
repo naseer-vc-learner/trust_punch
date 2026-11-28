@@ -43,7 +43,7 @@ dependencies:
   image: ^4.10.1
   flutter_tts: ^4.2.5
   safe_device: ^1.4.1
-  crypto: ^3.0.7
+  crypto: ^3.0.8
   # Where punch selfies are kept: the app's private support folder.
   path_provider: 2.1.6
   # End-of-shift reminder on a worker's own phone. 22.3.3 is the last of the
