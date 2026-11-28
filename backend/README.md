@@ -13,7 +13,7 @@ phone claims.
 ```bash
 cd backend
 /opt/homebrew/bin/python3.14 -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/pip install --require-hashes -r requirements-dev.txt
 .venv/bin/pytest -q                      # all tests should pass
 scripts/make-dev-cert.sh                 # HTTPS certificate for this Mac
 ```
@@ -21,6 +21,28 @@ scripts/make-dev-cert.sh                 # HTTPS certificate for this Mac
 Run `make-dev-cert.sh` again whenever the Mac's Wi-Fi address changes. It
 keeps the same private CA, so the app's trust setting stays valid.
 `certs/` holds private keys and is never committed.
+
+## Dependencies
+
+`requirements.in` (runtime) and `requirements-dev.in` (tests) list what we
+depend on directly. `requirements.txt` and `requirements-dev.txt` are
+**generated lock files**: every package, including the ones those pull in, at
+an exact version with SHA-256 hashes. Never edit them by hand. CI fails if
+they drift from the `.in` files, and the vulnerability scan reads the lock,
+so it sees exactly what gets installed.
+
+```bash
+.venv/bin/pip install pip-tools==7.7.0
+# after editing requirements.in or requirements-dev.in:
+.venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras \
+  --output-file=requirements.txt requirements.in
+.venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras \
+  --output-file=requirements-dev.txt requirements-dev.in
+.venv/bin/pip-sync requirements-dev.txt      # make .venv match exactly
+# to take a security fix in a package you don't list directly:
+.venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras \
+  --upgrade-package <name> --output-file=requirements.txt requirements.in
+```
 
 ## Run the server
 

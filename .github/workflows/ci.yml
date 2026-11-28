@@ -74,7 +74,23 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
           cache-dependency-path: backend/requirements*.txt
-      - run: pip install -r requirements-dev.txt
+      # Lock files carry a SHA-256 for every package: a changed or tampered
+      # download is refused.
+      - run: pip install --require-hashes -r requirements-dev.txt
+      - name: Lock files match their .in sources
+        run: |
+          pip install pip-tools==7.7.0
+          # Compile into a copy of the lock: pip-compile keeps the pinned
+          # versions, so this fails only when requirements.in and the lock
+          # disagree, not when upstream publishes a release.
+          for pair in "requirements.in requirements.txt" "requirements-dev.in requirements-dev.txt"; do
+            set -- $pair
+            cp "$2" "$RUNNER_TEMP/check.txt"
+            pip-compile --quiet --generate-hashes --allow-unsafe --strip-extras \
+              --output-file="$RUNNER_TEMP/check.txt" "$1"
+            diff <(grep -v '^#' "$2") <(grep -v '^#' "$RUNNER_TEMP/check.txt") \
+              || { echo "$2 is out of date with $1: run pip-compile (see the header of $1)"; exit 1; }
+          done
       - name: Tests
         run: pytest -q
       - name: Static security analysis (Bandit, medium+ severity)
@@ -113,7 +129,7 @@ jobs:
         env:
           TRUSTPUNCH_DB: ${{ runner.temp }}/tp-e2e.db
         run: |
-          pip install -r requirements.txt
+          pip install --require-hashes -r requirements.txt
           nohup uvicorn app.main:app --host 127.0.0.1 --port 8765 > "$RUNNER_TEMP/server.log" 2>&1 &
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8765/health && break; sleep 1; done
           CODE=$(python -m app.cli pair-code | grep -o '[0-9]\{6\}' | head -1)

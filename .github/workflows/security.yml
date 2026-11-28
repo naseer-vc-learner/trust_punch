@@ -48,6 +48,8 @@ jobs:
           persist-credentials: false
       - uses: google/osv-scanner-action/osv-scanner-action@32d3cd482bdadfb38b186c0ad1b031902d55d932 # v2.7.1
         with:
+          # backend/requirements.txt is a full hashed lock (pip-compile), so OSV
+          # sees exactly the versions the server installs.
           scan-args: |-
             --lockfile=pubspec.lock
             --lockfile=backend/requirements.txt
@@ -127,7 +129,7 @@ jobs:
           TRUSTPUNCH_DB: ${{ runner.temp }}/tp-dast.db
           TRUSTPUNCH_DEBUG: "1"
         run: |
-          pip install -r requirements.txt
+          pip install --require-hashes -r requirements.txt
           nohup uvicorn app.main:app --host 127.0.0.1 --port 8765 > "$RUNNER_TEMP/server.log" 2>&1 &
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8765/health && break; sleep 1; done
           CODE=$(python -m app.cli pair-code | grep -o '[0-9]\{6\}' | head -1)

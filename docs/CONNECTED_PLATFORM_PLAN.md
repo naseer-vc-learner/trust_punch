@@ -888,7 +888,7 @@ Start of every day (from the project root):
 ```bash
 git switch main && git pull --ff-only
 git switch -c day-NN-topic            # the branch name is given for each day
-cd backend && .venv/bin/pip install -r requirements-dev.txt && cd ..
+cd backend && .venv/bin/pip-sync requirements-dev.txt && cd ..   # .venv = the lock, exactly
 flutter pub get
 ```
 
@@ -1036,7 +1036,7 @@ git switch main && git pull --ff-only
 ### Day 2 — Server skeleton: config, layers, migrations, `/v1`
 
 **Build**
-- New dependencies, pinned in `requirements.txt` / `requirements-dev.txt`:
+- New dependencies, added to `requirements.in` / `requirements-dev.in`, then locked with hashes by `pip-compile` (see `backend/README.md`, "Dependencies"):
   - Runtime: `sqlalchemy==2.1.9`, `alembic==1.20.1`, `pydantic-settings==2.16.3`, `structlog==26.1.0`, `argon2-cffi==25.1.0`, `pyotp==2.12.2`, `psycopg[binary]==3.3.9`, `openpyxl==3.1.5`.
   - Dev: `ruff==0.17.6`, `mypy==2.4.1`.
 - Create the [4.3](#43-server-layout-target) layout.
@@ -1055,9 +1055,12 @@ git switch main && git pull --ff-only
 ```bash
 git switch main && git pull --ff-only && git switch -c day-02-server-skeleton
 cd backend
-.venv/bin/pip install sqlalchemy==2.1.9 alembic==1.20.1 pydantic-settings==2.16.3 \
-  structlog==26.1.0 argon2-cffi==25.1.0 pyotp==2.12.2 "psycopg[binary]==3.3.9" openpyxl==3.1.5 \
-  ruff==0.17.6 mypy==2.4.1
+printf '%s\n' sqlalchemy==2.1.9 alembic==1.20.1 pydantic-settings==2.16.3 structlog==26.1.0 \
+  argon2-cffi==25.1.0 pyotp==2.12.2 "psycopg[binary]==3.3.9" openpyxl==3.1.5 >> requirements.in
+printf '%s\n' ruff==0.17.6 mypy==2.4.1 >> requirements-dev.in
+.venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras --output-file=requirements.txt requirements.in
+.venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras --output-file=requirements-dev.txt requirements-dev.in
+.venv/bin/pip-sync requirements-dev.txt
 .venv/bin/alembic init migrations
 # edit migrations/env.py to use app.core.db metadata + TRUSTPUNCH_DB
 .venv/bin/alembic revision -m "0001 baseline: schema as of Day 0"
@@ -1079,8 +1082,8 @@ Add to `ci.yml` (backend job):
 **Conclusion:** the server is layered with migrations, every route is under `/v1` (old paths still work), there is a readiness endpoint, and the OpenAPI copy is checked in CI. The existing app and e2e test still pass.
 
 ```bash
-git add backend/app backend/migrations backend/alembic.ini backend/requirements.txt \
-        backend/requirements-dev.txt backend/scripts backend/tests docs/openapi.json .github/workflows/ci.yml
+git add backend/app backend/migrations backend/alembic.ini backend/requirements.in backend/requirements.txt \
+        backend/requirements-dev.in backend/requirements-dev.txt backend/scripts backend/tests docs/openapi.json .github/workflows/ci.yml
 git commit -m "feat(server): layered modules, Alembic migrations, /v1 routes, readiness, OpenAPI drift check"
 git push -u origin day-02-server-skeleton && gh pr create --fill --base main
 gh pr checks --watch && gh pr merge --squash --delete-branch

@@ -1,0 +1,12 @@
+# Development and test dependencies. Runtime packages come from requirements.in
+# and are held to the exact versions in the runtime lock (requirements.txt), so
+# tests run against what the server runs. Regenerate after editing:
+#
+#   .venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras \
+#     --output-file=requirements-dev.txt requirements-dev.in
+-r requirements.in
+-c requirements.txt
+
+pytest==9.2.0
+# Starlette's test client uses httpx2 (httpx with it is deprecated).
+httpx2==2.16.2

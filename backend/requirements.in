@@ -1,0 +1,11 @@
+# Direct runtime dependencies, pinned exactly: a new release never changes the
+# server without a review. Edit THIS file, then regenerate the lock file:
+#
+#   .venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras \
+#     --output-file=requirements.txt requirements.in
+#
+# requirements.txt is generated: every package (including the ones these pull
+# in) at an exact version with its SHA-256 hashes. Install it only with
+# `pip install --require-hashes`.
+fastapi==0.165.0
+uvicorn==0.54.0
