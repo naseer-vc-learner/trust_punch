@@ -15,13 +15,13 @@ CLOCK_TOLERANCE_S = 120.0
 # Rounding, and the phone measuring from its own fix a moment earlier.
 DISTANCE_SLACK_M = 10.0
 
-CLOCK_SKEW = "clock_skew"           # phone clock differs from the server's
-FUTURE_TIME = "future_time"         # punch time later than the server's now
-FAR_FROM_SITE = "far_from_site"     # fix is outside the location's circle
+CLOCK_SKEW = "clock_skew"  # phone clock differs from the server's
+FUTURE_TIME = "future_time"  # punch time later than the server's now
+FAR_FROM_SITE = "far_from_site"  # fix is outside the location's circle
 DISTANCE_MISMATCH = "distance_mismatch"  # reported distance is not the real one
-SITE_MOVED = "site_moved"           # location reported somewhere new
-OUT_OF_ORDER = "out_of_order"       # breaks in → (break)* → out for that day
-OTHER_PHONE = "other_phone"         # a session continued on a different phone
+SITE_MOVED = "site_moved"  # location reported somewhere new
+OUT_OF_ORDER = "out_of_order"  # breaks in → (break)* → out for that day
+OTHER_PHONE = "other_phone"  # a session continued on a different phone
 
 
 def haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:

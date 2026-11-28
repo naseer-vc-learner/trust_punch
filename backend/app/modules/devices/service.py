@@ -16,7 +16,9 @@ import sqlite3
 import time
 import uuid
 from collections import defaultdict, deque
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+
+from . import repo
 
 CODE_LIFETIME = timedelta(minutes=10)
 MAX_FAILED_PER_CODE = 5
@@ -25,7 +27,7 @@ CLIENT_WINDOW_S = 600
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _hash(value: str) -> str:
@@ -36,11 +38,7 @@ def new_pair_code(conn: sqlite3.Connection) -> str:
     """A fresh 6-digit code, open for [CODE_LIFETIME]."""
     code = f"{secrets.randbelow(1_000_000):06d}"
     now = _now()
-    conn.execute(
-        "INSERT OR REPLACE INTO pair_codes (code_hash, created_at, expires_at)"
-        " VALUES (?, ?, ?)",
-        (_hash(code), now.isoformat(), (now + CODE_LIFETIME).isoformat()),
-    )
+    repo.insert_pair_code(conn, _hash(code), now.isoformat(), (now + CODE_LIFETIME).isoformat())
     return code
 
 
@@ -77,6 +75,14 @@ class TooManyAttempts(Exception):
     pass
 
 
+class NotPaired(Exception):
+    pass
+
+
+class Blocked(Exception):
+    pass
+
+
 def pair_device(
     conn: sqlite3.Connection, code: str, name: str, platform: str, client: str
 ) -> tuple[str, str]:
@@ -86,33 +92,18 @@ def pair_device(
     now = _now().isoformat()
     conn.execute("BEGIN IMMEDIATE")
     try:
-        row = conn.execute(
-            "SELECT code_hash FROM pair_codes WHERE code_hash = ?"
-            " AND used_at IS NULL AND expires_at > ? AND failed < ?",
-            (_hash(code), now, MAX_FAILED_PER_CODE),
-        ).fetchone()
+        row = repo.find_open_code(conn, _hash(code), now, MAX_FAILED_PER_CODE)
         if row is None:
             # Counts against every open code, so guessing closes them all.
-            conn.execute(
-                "UPDATE pair_codes SET failed = failed + 1"
-                " WHERE used_at IS NULL AND expires_at > ?",
-                (now,),
-            )
+            repo.count_failure_on_open_codes(conn, now)
             conn.execute("COMMIT")
             limiter.failed(client)
             raise PairingRefused()
 
         device_id = str(uuid.uuid4())
         token = secrets.token_urlsafe(32)
-        conn.execute(
-            "UPDATE pair_codes SET used_at = ? WHERE code_hash = ?",
-            (now, row["code_hash"]),
-        )
-        conn.execute(
-            "INSERT INTO devices (id, name, platform, token_hash, created_at)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (device_id, name, platform, _hash(token), now),
-        )
+        repo.mark_code_used(conn, row["code_hash"], now)
+        repo.insert_device(conn, device_id, name, platform, _hash(token), now)
         conn.execute("COMMIT")
         return device_id, token
     except PairingRefused:
@@ -123,6 +114,25 @@ def pair_device(
 
 
 def device_for_token(conn: sqlite3.Connection, token: str) -> sqlite3.Row | None:
-    return conn.execute(
-        "SELECT * FROM devices WHERE token_hash = ?", (_hash(token),)
-    ).fetchone()
+    return repo.by_token_hash(conn, _hash(token))
+
+
+def authenticate(conn: sqlite3.Connection, authorization: str | None) -> sqlite3.Row:
+    """The paired, unblocked device behind an ``Authorization: Bearer`` header."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise NotPaired()
+    device = device_for_token(conn, authorization.removeprefix("Bearer ").strip())
+    if device is None:
+        raise NotPaired()
+    if device["blocked"]:
+        raise Blocked()
+    repo.touch(conn, device["id"], _now().isoformat())
+    return device
+
+
+def list_devices(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return repo.all_devices(conn)
+
+
+def set_blocked(conn: sqlite3.Connection, device_id: str, blocked: bool) -> bool:
+    return repo.set_blocked(conn, device_id, blocked) > 0

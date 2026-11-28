@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
@@ -19,7 +19,7 @@ def test_health_reports_current_utc_time():
     body = client.get("/health").json()
     server_time = datetime.fromisoformat(body["serverTime"])
     assert server_time.tzinfo is not None
-    assert abs((datetime.now(timezone.utc) - server_time).total_seconds()) < 5
+    assert abs((datetime.now(UTC) - server_time).total_seconds()) < 5
 
 
 def test_docs_are_off_unless_debug():

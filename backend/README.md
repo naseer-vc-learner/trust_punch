@@ -79,9 +79,45 @@ the phone cannot reach the Mac.
 .venv/bin/python -m app.cli block <device-id>  # stop a lost phone uploading
 .venv/bin/python -m app.cli unblock <device-id>
 .venv/bin/python -m app.cli report --day 2026-11-27
+.venv/bin/python -m app.cli migrate            # bring the database up to date
 ```
 
-The report lists each punch with the server's findings.
+The report lists each punch with the server's findings. Every command (and
+the server at start-up) first brings the database up to date.
+
+## How the code is laid out
+
+```
+app/main.py          app factory: middleware, error handlers, routers, migrations at start-up
+app/core/            config (TRUSTPUNCH_*), database + migrations, RFC 9457 errors,
+                     request ids, security headers, JSON access log
+app/modules/<name>/  router.py (HTTP) → service.py (rules) → repo.py (SQL)
+                     deps.py: dependencies other modules may use
+migrations/          Alembic: 0001 = the schema before migrations, 0002 = tenants
+```
+
+Another module may import only a module's `service.py` or `deps.py`;
+`tests/unit/test_architecture.py` fails the build otherwise.
+
+Every route is under `/v1`. The paths today's app uses (`/devices/pair`,
+`/punches/batch`, …) also work until the app moves to `/v1`, and are left
+out of the API description. `GET /v1/health/ready` answers 200 only when
+the database is reachable and fully migrated; `GET /v1/meta/version` gives
+the oldest app version the server accepts (`TRUSTPUNCH_MIN_APP_VERSION`).
+
+Errors are RFC 9457 problem details (`application/problem+json`) with a
+`requestId`, also sent as the `X-Request-ID` header, which matches the
+server's log line. Logs are JSON with route templates only: no names,
+employee ids, locations or tokens.
+
+## Checks to run before committing
+
+```bash
+.venv/bin/ruff check . && .venv/bin/ruff format --check .
+.venv/bin/mypy
+.venv/bin/pytest -q
+.venv/bin/python scripts/export_openapi.py > ../docs/openapi.json   # when the API changed
+```
 
 ## What the server checks
 
@@ -121,4 +157,5 @@ server sets that one aside.
 - **Server-owned projects, locations and workers**, which phones would
   download.
 - **Several gate phones sharing one roster.**
-- **PostgreSQL** for a real deployment.
+- **PostgreSQL** for a real deployment. Migrations are already portable;
+  the queries move from sqlite3 to SQLAlchemy module by module.
