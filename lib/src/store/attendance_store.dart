@@ -7,7 +7,9 @@ import '../models/attendance.dart';
 import '../models/leave.dart';
 import '../models/project.dart';
 import '../models/requests.dart';
-import '../services/location_service.dart' show haversineMeters;
+import '../services/location_service.dart'
+    show geofenceRadiusMeters, haversineMeters;
+import 'attendance_database.dart';
 
 /// Standard day, whatever the locations' shifts: anything past this is
 /// overtime (the UAE limit is 8 hours a day).
@@ -28,16 +30,48 @@ const gpsClockTolerance = Duration(minutes: 5);
 /// when a worker moves without checking out: 30 km/h, city traffic.
 const travelSpeedMetersPerSecond = 30000 / 3600;
 
+/// Days of punches kept in memory, counting back from today. Older ones stay
+/// in the database: the calendar loads a month on demand
+/// ([AttendanceStore.ensureMonthLoaded]), and each worker's newest punch is
+/// always kept, however old, so an open session is never missed.
+const punchMemoryDays = 35;
+
+/// How long before its start a shift already counts as running, for
+/// choosing between projects that share a location: someone arriving at
+/// 06:40 for a 07:00 shift is there for that shift.
+const earlyCheckIn = Duration(minutes: 30);
+
 /// What a worker may do next at one location, and anything the app has to
 /// record first to make it legal.
 class PunchPlan {
-  const PunchPlan({required this.actions, this.autoClose});
+  const PunchPlan({required this.actions, this.autoClose, this.autoOpen});
 
   final List<PunchType> actions;
 
   /// A check-out the app adds before the worker's own punch: it closes a
   /// session left open at another location, or on an earlier day.
   final Punch? autoClose;
+
+  /// A check-in the app adds right after [autoClose], when a worker stayed
+  /// on at a location shared by two projects: one project's shift ended and
+  /// the other's took over, without anyone punching.
+  final Punch? autoOpen;
+}
+
+/// Which location a punch belongs to, when the worker stands where several
+/// are in range (two projects sharing one place, say).
+class SiteChoice {
+  const SiteChoice.of(Site this.site) : options = const [];
+  const SiteChoice.ask(this.options) : site = null;
+  const SiteChoice.none()
+      : site = null,
+        options = const [];
+
+  /// Decided: punch here.
+  final Site? site;
+
+  /// Undecided: shifts here overlap, so the worker picks one of these.
+  final List<Site> options;
 }
 
 /// Who is using the phone, and so which home screen they get.
@@ -49,10 +83,17 @@ class PunchPlan {
 enum AppRole { worker, kiosk, supervisor }
 
 /// Everything the app knows, kept on the device only — no backend, no network.
+///
+/// Records live in SQLite ([AttendanceDatabase]), one row each, so a punch
+/// is one small insert however long the history. Reads are answered from
+/// memory: punches are indexed by worker and by day, so "what did this
+/// worker do today" is a binary search, not a walk through every punch.
+/// Small settings (language, role, the phone's owner) stay in
+/// `shared_preferences`.
 class AttendanceStore extends ChangeNotifier {
   AttendanceStore._(
     this._prefs,
-    this._punches,
+    this._db,
     this._sites,
     this._workers,
     this._leaves,
@@ -62,142 +103,183 @@ class AttendanceStore extends ChangeNotifier {
     this._languageCode,
     this._lastRole,
     this._activeWorkerId,
+    this._loadedFromDay,
+    this._todayKey,
   );
 
-  static const _overtimeKey = 'overtime';
-  static const _correctionsKey = 'corrections';
-
-  final List<OvertimeDecision> _overtime;
-  final List<CorrectionRequest> _corrections;
-
-  /// True inside [batch]: saves wait until the end.
-  bool _batching = false;
-
-  /// Runs [body] with saving held back, then saves everything once — for
-  /// bulk changes such as loading demo data, which would otherwise rewrite
-  /// the whole punch list after every punch.
-  Future<void> batch(Future<void> Function() body) async {
-    _batching = true;
-    try {
-      await body();
-    } finally {
-      _batching = false;
-      await _savePunches();
-      await _saveWorkers();
-      await _saveSites();
-      await _saveProjects();
-      await _saveLeaves();
-      await _saveCorrections();
-      await _saveOvertime();
-    }
-  }
-
-  /// Deletes everything recorded for [workerIds] — punches, leave,
-  /// corrections and overtime decisions — but not the workers themselves.
-  Future<void> removeRecordsOf(Set<String> workerIds) async {
-    _punches.removeWhere((p) => workerIds.contains(p.workerId));
-    _leaves.removeWhere((l) => workerIds.contains(l.workerId));
-    _corrections.removeWhere((c) => workerIds.contains(c.workerId));
-    _overtime.removeWhere((d) => workerIds.contains(d.workerId));
-    await batch(() async {});
-  }
-
-  static const _punchesKey = 'punches';
+  // Record kinds in the database; the first five are also the old
+  // shared_preferences keys they are imported from.
   static const _sitesKey = 'sites';
   static const _workersKey = 'workers';
   static const _leavesKey = 'leaves';
   static const _projectsKey = 'projects';
+  static const _overtimeKey = 'overtime';
+  static const _correctionsKey = 'corrections';
+  static const _punchesKey = 'punches';
+
   static const _languageKey = 'language';
   static const _roleKey = 'role';
   static const _activeWorkerKey = 'activeWorker';
+  static const _importedMeta = 'importedPrefs';
 
   final SharedPreferences _prefs;
-  final List<Punch> _punches;
+  final AttendanceDatabase _db;
   final List<Site> _sites;
   final List<Worker> _workers;
   final List<LeaveRequest> _leaves;
   final List<Project> _projects;
+  final List<OvertimeDecision> _overtime;
+  final List<CorrectionRequest> _corrections;
   String _languageCode;
   AppRole? _lastRole;
   String? _activeWorkerId;
 
+  // ------------------------------------------------------- punches in memory
+
+  /// Each worker's punches in time order; the last one is their newest.
+  final Map<String, List<Punch>> _byWorker = {};
+
+  /// Each day's punches (key from [dayKeyOf]) in time order.
+  final Map<int, List<Punch>> _byDay = {};
+
+  /// Days from here on are complete in memory.
+  int _loadedFromDay;
+
+  /// Older months (`yyyymm`) the calendar has loaded.
+  final Set<int> _loadedMonths = {};
+
+  /// The day the window was last moved for; see [_moveWindow].
+  int _todayKey;
+
+  DateTime? _newest;
+
+  /// Bumped on every change; caches compare against it.
+  int _version = 0;
+
   static Future<AttendanceStore> load() async {
     final prefs = await SharedPreferences.getInstance();
+    final db = await AttendanceDatabase.openDefault();
+    await _importFromPreferences(prefs, db);
 
-    final punches = (prefs.getStringList(_punchesKey) ?? const <String>[])
-        .map((e) => Punch.fromJson(jsonDecode(e) as Map<String, dynamic>))
-        .toList();
-
-    var sites = (prefs.getStringList(_sitesKey) ?? const <String>[])
-        .map((e) => Site.fromJson(jsonDecode(e) as Map<String, dynamic>))
-        .toList();
-
-    var workers = (prefs.getStringList(_workersKey) ?? const <String>[])
-        .map((e) => Worker.fromJson(jsonDecode(e) as Map<String, dynamic>))
-        .toList();
-
-    final leaves = (prefs.getStringList(_leavesKey) ?? const <String>[])
-        .map((e) =>
-            LeaveRequest.fromJson(jsonDecode(e) as Map<String, dynamic>))
-        .toList();
-
-    final projects = (prefs.getStringList(_projectsKey) ?? const <String>[])
-        .map((e) => Project.fromJson(jsonDecode(e) as Map<String, dynamic>))
-        .toList();
+    var sites = db.records(_sitesKey).map(Site.fromJson).toList();
+    var workers = db.records(_workersKey).map(Worker.fromJson).toList();
+    final projects = db.records(_projectsKey).map(Project.fromJson).toList();
 
     // Sites and workers saved before projects existed belong to no project,
     // and so could never punch. They move into "General" once, and are saved
     // back, so nothing recorded before is lost.
     if (sites.any((s) => s.projectId.isEmpty) ||
         workers.any((w) => w.projectId.isEmpty)) {
-      if (!projects.any((p) => p.id == generalProjectId)) {
-        projects.add(const Project(id: generalProjectId, name: 'General'));
-      }
-      sites = [
-        for (final s in sites)
-          s.projectId.isEmpty ? s.copyWith(projectId: generalProjectId) : s,
-      ];
-      workers = [
-        for (final w in workers)
-          w.projectId.isEmpty ? w.copyWith(projectId: generalProjectId) : w,
-      ];
-      await prefs.setStringList(
-          _projectsKey, [for (final p in projects) jsonEncode(p.toJson())]);
-      await prefs.setStringList(
-          _sitesKey, [for (final s in sites) jsonEncode(s.toJson())]);
-      await prefs.setStringList(
-          _workersKey, [for (final w in workers) jsonEncode(w.toJson())]);
+      db.transaction(() {
+        if (!projects.any((p) => p.id == generalProjectId)) {
+          const general = Project(id: generalProjectId, name: 'General');
+          projects.add(general);
+          db.putRecord(_projectsKey, general.id, general.toJson());
+        }
+        sites = [
+          for (final s in sites)
+            if (s.projectId.isEmpty)
+              s.copyWith(projectId: generalProjectId)
+            else
+              s,
+        ];
+        workers = [
+          for (final w in workers)
+            if (w.projectId.isEmpty)
+              w.copyWith(projectId: generalProjectId)
+            else
+              w,
+        ];
+        for (final s in sites) {
+          db.putRecord(_sitesKey, s.id, s.toJson());
+        }
+        for (final w in workers) {
+          db.putRecord(_workersKey, w.id, w.toJson());
+        }
+      });
     }
 
-    final overtime = (prefs.getStringList(_overtimeKey) ?? const <String>[])
-        .map((e) =>
-            OvertimeDecision.fromJson(jsonDecode(e) as Map<String, dynamic>))
-        .toList();
-
-    final corrections =
-        (prefs.getStringList(_correctionsKey) ?? const <String>[])
-            .map((e) => CorrectionRequest.fromJson(
-                jsonDecode(e) as Map<String, dynamic>))
-            .toList();
-
-    // Corrections insert punches at their real time, so the list is kept in
-    // time order; older saves made in arrival order are sorted once here.
-    punches.sort((a, b) => a.at.compareTo(b.at));
-
-    return AttendanceStore._(
+    final now = DateTime.now();
+    final store = AttendanceStore._(
       prefs,
-      punches,
+      db,
       sites,
       workers,
-      leaves,
+      db.records(_leavesKey).map(LeaveRequest.fromJson).toList(),
       projects,
-      overtime,
-      corrections,
+      db.records(_overtimeKey).map(OvertimeDecision.fromJson).toList(),
+      db.records(_correctionsKey).map(CorrectionRequest.fromJson).toList(),
       prefs.getString(_languageKey) ?? 'en',
       _parseRole(prefs.getString(_roleKey)),
       prefs.getString(_activeWorkerKey),
+      _windowStart(now),
+      dayKeyOf(now),
     );
+
+    // Recent days in full; anything older only as each worker's newest
+    // punch, which is all [planAt] and [statusOf] need.
+    for (final p in db.punchesBetweenDays(store._loadedFromDay, 99991231)) {
+      store._index(p);
+    }
+    for (final p in db.latestPunchPerWorker()) {
+      if (dayKeyOf(p.at) < store._loadedFromDay) store._index(p);
+    }
+    return store;
   }
+
+  static int _windowStart(DateTime now) => dayKeyOf(
+      DateTime(now.year, now.month, now.day - punchMemoryDays));
+
+  /// Moves anything saved by older versions of the app (one JSON list per
+  /// kind in `shared_preferences`) into the database, once, then removes it
+  /// from preferences.
+  static Future<void> _importFromPreferences(
+    SharedPreferences prefs,
+    AttendanceDatabase db,
+  ) async {
+    const kinds = [
+      _punchesKey,
+      _sitesKey,
+      _workersKey,
+      _leavesKey,
+      _projectsKey,
+      _overtimeKey,
+      _correctionsKey,
+    ];
+    final present = kinds.where(prefs.containsKey).toList();
+    if (present.isEmpty) return;
+
+    // The marker is written in the same transaction, so an app killed
+    // between this and removing the keys does not import twice.
+    if (db.meta(_importedMeta) == null) {
+      List<Map<String, dynamic>> read(String key) => [
+            for (final e in prefs.getStringList(key) ?? const <String>[])
+              jsonDecode(e) as Map<String, dynamic>,
+          ];
+      db.transaction(() {
+        final punches = read(_punchesKey).map(Punch.fromJson).toList()
+          ..sort((a, b) => a.at.compareTo(b.at));
+        punches.forEach(db.insertPunch);
+        for (final kind in kinds.skip(1)) {
+          for (final json in read(kind)) {
+            db.putRecord(kind, _recordId(kind, json), json);
+          }
+        }
+        db.setMeta(_importedMeta, DateTime.now().toIso8601String());
+      });
+    }
+    for (final key in present) {
+      await prefs.remove(key);
+    }
+  }
+
+  static String _recordId(String kind, Map<String, dynamic> json) =>
+      kind == _overtimeKey
+          ? _overtimeId(OvertimeDecision.fromJson(json))
+          : json['id'] as String;
+
+  static String _overtimeId(OvertimeDecision d) =>
+      '${d.workerId}|${dayKeyOf(d.date)}';
 
   /// Only worker and kiosk are ever restored, so reopening the app can never
   /// land in the supervisor screens without the PIN.
@@ -206,6 +288,188 @@ class AttendanceStore extends ChangeNotifier {
         'kiosk' => AppRole.kiosk,
         _ => null,
       };
+
+  // ------------------------------------------------------------ saving
+
+  /// True inside [batch]: listeners hear about it once, at the end.
+  bool _batching = false;
+
+  /// Runs [body] as one database transaction, with listeners told once at
+  /// the end — for bulk changes such as loading demo data.
+  Future<void> batch(Future<void> Function() body) async {
+    _db.begin();
+    _batching = true;
+    try {
+      await body();
+    } finally {
+      _batching = false;
+      _db.commit();
+      notifyListeners();
+    }
+  }
+
+  void _changed() {
+    _version++;
+    _leavesByWorker = null;
+    if (!_batching) notifyListeners();
+  }
+
+  /// Deletes everything recorded for [workerIds] — punches, leave,
+  /// corrections and overtime decisions — but not the workers themselves.
+  Future<void> removeRecordsOf(Set<String> workerIds) async {
+    _db.transaction(() {
+      for (final id in workerIds) {
+        _db.deletePunchesOf(id);
+      }
+      for (final l in _leaves.where((l) => workerIds.contains(l.workerId))) {
+        _db.deleteRecord(_leavesKey, l.id);
+      }
+      for (final c
+          in _corrections.where((c) => workerIds.contains(c.workerId))) {
+        _db.deleteRecord(_correctionsKey, c.id);
+      }
+      for (final d in _overtime.where((d) => workerIds.contains(d.workerId))) {
+        _db.deleteRecord(_overtimeKey, _overtimeId(d));
+      }
+    });
+    for (final id in workerIds) {
+      final punches = _byWorker.remove(id);
+      if (punches == null) continue;
+      for (final p in punches) {
+        _byDay[dayKeyOf(p.at)]?.remove(p);
+      }
+    }
+    _byDay.removeWhere((_, list) => list.isEmpty);
+    _recomputeNewest();
+    _leaves.removeWhere((l) => workerIds.contains(l.workerId));
+    _corrections.removeWhere((c) => workerIds.contains(c.workerId));
+    _overtime.removeWhere((d) => workerIds.contains(d.workerId));
+    _changed();
+  }
+
+  // ------------------------------------------------------------ punch index
+
+  /// First position in [list] whose punch is later than [at]: inserting
+  /// there keeps time order, after any punch at the same moment.
+  static int _after(List<Punch> list, DateTime at) {
+    var lo = 0, hi = list.length;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      if (list[mid].at.isAfter(at)) {
+        hi = mid;
+      } else {
+        lo = mid + 1;
+      }
+    }
+    return lo;
+  }
+
+  /// First position in [list] whose punch is not earlier than [at].
+  static int _notBefore(List<Punch> list, DateTime at) {
+    var lo = 0, hi = list.length;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      if (list[mid].at.isBefore(at)) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
+  }
+
+  void _index(Punch p) {
+    final mine = _byWorker.putIfAbsent(p.workerId, () => []);
+    mine.insert(_after(mine, p.at), p);
+    final day = _byDay.putIfAbsent(dayKeyOf(p.at), () => []);
+    day.insert(_after(day, p.at), p);
+    final newest = _newest;
+    if (newest == null || p.at.isAfter(newest)) _newest = p.at;
+  }
+
+  void _unindex(Punch p) {
+    final mine = _byWorker[p.workerId];
+    mine?.remove(p);
+    if (mine != null && mine.isEmpty) _byWorker.remove(p.workerId);
+    final key = dayKeyOf(p.at);
+    final day = _byDay[key];
+    day?.remove(p);
+    if (day != null && day.isEmpty) _byDay.remove(key);
+    if (p.at == _newest) _recomputeNewest();
+  }
+
+  bool _isIndexed(Punch p) {
+    final mine = _byWorker[p.workerId];
+    if (mine == null) return false;
+    for (var i = _notBefore(mine, p.at);
+        i < mine.length && mine[i].at == p.at;
+        i++) {
+      if (mine[i].type == p.type) return true;
+    }
+    return false;
+  }
+
+  void _recomputeNewest() {
+    DateTime? newest;
+    for (final list in _byWorker.values) {
+      final at = list.last.at;
+      if (newest == null || at.isAfter(newest)) newest = at;
+    }
+    _newest = newest;
+  }
+
+  /// On the first change of a new day, drops days that have left the
+  /// memory window (they stay in the database), so a gate phone left
+  /// running for weeks does not keep growing. Each worker's newest punch
+  /// stays.
+  void _moveWindow() {
+    final now = DateTime.now();
+    final today = dayKeyOf(now);
+    if (today <= _todayKey) return;
+    _todayKey = today;
+    final from = _windowStart(now);
+    if (from <= _loadedFromDay && _loadedMonths.isEmpty) return;
+    _loadedFromDay = from;
+    _loadedMonths.clear();
+    _byDay.removeWhere((key, _) => key < from);
+    for (final list in _byWorker.values) {
+      final newest = list.last;
+      list.removeWhere((p) => !identical(p, newest) && dayKeyOf(p.at) < from);
+    }
+    // A newest punch kept from an old day is that day's only entry.
+    for (final list in _byWorker.values) {
+      final p = list.last;
+      final key = dayKeyOf(p.at);
+      if (key < from) {
+        final day = _byDay[key] ??= [];
+        day.insert(_after(day, p.at), p);
+      }
+    }
+  }
+
+  bool _dayLoaded(int key) =>
+      key >= _loadedFromDay || _loadedMonths.contains(key ~/ 100);
+
+  /// Loads a month older than the memory window, for the calendar. Returns
+  /// whether anything had to be read. Cheap when already in memory.
+  bool ensureMonthLoaded(int year, int month) {
+    final monthKey = year * 100 + month;
+    final first = monthKey * 100 + 1;
+    if (first >= _loadedFromDay || _loadedMonths.contains(monthKey)) {
+      return false;
+    }
+    final last = monthKey * 100 + 31;
+    final to = last < _loadedFromDay ? last : _loadedFromDay - 1;
+    for (final p in _db.punchesBetweenDays(first, to)) {
+      if (!_isIndexed(p)) _index(p);
+    }
+    _loadedMonths.add(monthKey);
+    _version++;
+    notifyListeners();
+    return true;
+  }
+
+  // ------------------------------------------------------------ simple reads
 
   List<Site> get sites => List.unmodifiable(_sites);
   List<Worker> get workers => List.unmodifiable(_workers);
@@ -229,8 +493,9 @@ class AttendanceStore extends ChangeNotifier {
   List<Site> sitesOf(String projectId) =>
       _sites.where((s) => s.projectId == projectId).toList(growable: false);
 
+  /// Everyone on [projectId], including those also on other projects.
   List<Worker> workersOf(String projectId) =>
-      _workers.where((w) => w.projectId == projectId).toList(growable: false);
+      _workers.where((w) => w.isOn(projectId)).toList(growable: false);
 
   /// The role the phone reopens in; null means show the role picker.
   AppRole? get lastRole => _lastRole;
@@ -269,16 +534,17 @@ class AttendanceStore extends ChangeNotifier {
 
   // ---------------------------------------------------------------- per worker
 
-  List<Punch> punchesFor(String workerId, DateTime day) => _punches
-      .where((p) => p.workerId == workerId && _isSameDay(p.at, day))
-      .toList(growable: false);
-
-  Punch? lastPunchFor(String workerId) {
-    for (var i = _punches.length - 1; i >= 0; i--) {
-      if (_punches[i].workerId == workerId) return _punches[i];
-    }
-    return null;
+  List<Punch> punchesFor(String workerId, DateTime day) {
+    final mine = _byWorker[workerId];
+    if (mine == null) return const [];
+    final start = DateTime(day.year, day.month, day.day);
+    final end = DateTime(day.year, day.month, day.day + 1);
+    final from = _notBefore(mine, start);
+    final to = _notBefore(mine, end);
+    return from == to ? const [] : mine.sublist(from, to);
   }
+
+  Punch? lastPunchFor(String workerId) => _byWorker[workerId]?.last;
 
   WorkerStatus statusOf(String workerId) => switch (lastPunchFor(workerId)?.type) {
         PunchType.checkIn || PunchType.breakEnd => WorkerStatus.working,
@@ -286,10 +552,71 @@ class AttendanceStore extends ChangeNotifier {
         _ => WorkerStatus.off,
       };
 
-  /// Whether [worker] may punch at [site]: only at their own project's
-  /// locations, so hours can never land on a project they are not on.
-  bool canPunchAt(Worker worker, Site site) =>
-      worker.projectId.isNotEmpty && worker.projectId == site.projectId;
+  /// Whether [worker] may punch at [site]: only at the locations of their
+  /// own projects, so hours can never land on a project they are not on.
+  bool canPunchAt(Worker worker, Site site) => worker.isOn(site.projectId);
+
+  /// Two locations at the same place: within one check-in circle of each
+  /// other. Typically one place used by two projects, each with its own
+  /// location record and shift.
+  static bool samePlace(Site a, Site b) =>
+      haversineMeters(a.latitude, a.longitude, b.latitude, b.longitude) <=
+      geofenceRadiusMeters;
+
+  /// Whether [site]'s shift is running at [at], counting [earlyCheckIn].
+  static bool shiftRunning(Site site, DateTime at) =>
+      !at.isBefore(site.shiftStartOn(at).subtract(earlyCheckIn)) &&
+      at.isBefore(site.shiftEndOn(at));
+
+  /// Which of the locations in range ([here]) [worker]'s punch at [now]
+  /// belongs to. Only their own projects' locations count; with several,
+  /// the shift decides:
+  /// - already on the clock at one of them: that one, unless its shift has
+  ///   ended and another project's shift here is running (then that one,
+  ///   and [planAt] hands the session over at the shift end);
+  /// - otherwise the one whose shift is running;
+  /// - two running at once (overlapping shifts): the worker is asked;
+  /// - none running: the one whose shift is nearest in time.
+  SiteChoice siteFor(Worker worker, List<Site> here, {DateTime? now}) {
+    final at = now ?? DateTime.now();
+    final mine = here.where((s) => canPunchAt(worker, s)).toList();
+    if (mine.isEmpty) return const SiteChoice.none();
+    if (mine.length == 1) return SiteChoice.of(mine.first);
+
+    SiteChoice pick(List<Site> sites) =>
+        sites.length == 1 ? SiteChoice.of(sites.first) : SiteChoice.ask(sites);
+
+    final last = lastPunchFor(worker.id);
+    final open = last != null &&
+            last.type != PunchType.checkOut &&
+            _isSameDay(last.at, at)
+        ? mine.where((s) => s.id == last.siteId).firstOrNull
+        : null;
+    if (open != null) {
+      if (at.isBefore(open.shiftEndOn(at))) return SiteChoice.of(open);
+      final takingOver = [
+        for (final s in mine)
+          if (s.id != open.id && shiftRunning(s, at)) s,
+      ];
+      return takingOver.isEmpty ? SiteChoice.of(open) : pick(takingOver);
+    }
+
+    final running = mine.where((s) => shiftRunning(s, at)).toList();
+    if (running.isNotEmpty) return pick(running);
+
+    Duration gap(Site s) {
+      final start = s.shiftStartOn(at).difference(at).abs();
+      final end = s.shiftEndOn(at).difference(at).abs();
+      return start < end ? start : end;
+    }
+
+    final nearest = [...mine]..sort((a, b) => gap(a).compareTo(gap(b)));
+    final best = gap(nearest.first);
+    return pick([
+      for (final s in nearest)
+        if (gap(s) == best) s,
+    ]);
+  }
 
   /// What [workerId] may do next at [site], at time [now].
   ///
@@ -301,7 +628,11 @@ class AttendanceStore extends ChangeNotifier {
   ///   closed first by [PunchPlan.autoClose], at this check-in minus the
   ///   estimated travel time, never before the worker's last punch there;
   /// - left open on an earlier day: closed at that location's shift end that
-  ///   day, then check in, so a forgotten check-out never adds whole nights.
+  ///   day, then check in, so a forgotten check-out never adds whole nights;
+  /// - open at another project's location at the same place, whose shift
+  ///   has ended: closed at that shift end and opened here at the same
+  ///   moment ([PunchPlan.autoOpen]), so the hours split between the two
+  ///   projects; then check out or break here.
   PunchPlan planAt(String workerId, Site site, {DateTime? now}) {
     final at = now ?? DateTime.now();
     final last = lastPunchFor(workerId);
@@ -319,6 +650,48 @@ class AttendanceStore extends ChangeNotifier {
       );
     }
 
+    Punch closing(DateTime at) => Punch(
+          type: PunchType.checkOut,
+          at: at,
+          workerId: last.workerId,
+          employeeId: last.employeeId,
+          workerName: last.workerName,
+          siteId: last.siteId,
+          siteName: last.siteName,
+          latitude: openSite?.latitude ?? last.latitude,
+          longitude: openSite?.longitude ?? last.longitude,
+          distanceMeters: 0,
+          auto: true,
+        );
+
+    // Stayed on at a shared place past the first project's shift.
+    final handoverAt = openSite?.shiftEndOn(at);
+    if (!earlierDay &&
+        openSite != null &&
+        handoverAt != null &&
+        openSite.projectId != site.projectId &&
+        samePlace(openSite, site) &&
+        handoverAt.isAfter(last.at) &&
+        !handoverAt.isAfter(at)) {
+      return PunchPlan(
+        actions: const [PunchType.checkOut, PunchType.breakStart],
+        autoClose: closing(handoverAt),
+        autoOpen: Punch(
+          type: PunchType.checkIn,
+          at: handoverAt,
+          workerId: last.workerId,
+          employeeId: last.employeeId,
+          workerName: last.workerName,
+          siteId: site.id,
+          siteName: site.name,
+          latitude: site.latitude,
+          longitude: site.longitude,
+          distanceMeters: 0,
+          auto: true,
+        ),
+      );
+    }
+
     final DateTime closeAt;
     if (earlierDay) {
       final shiftEnd = openSite?.shiftEndOn(last.at);
@@ -333,19 +706,7 @@ class AttendanceStore extends ChangeNotifier {
 
     return PunchPlan(
       actions: const [PunchType.checkIn],
-      autoClose: Punch(
-        type: PunchType.checkOut,
-        at: closeAt,
-        workerId: last.workerId,
-        employeeId: last.employeeId,
-        workerName: last.workerName,
-        siteId: last.siteId,
-        siteName: last.siteName,
-        latitude: openSite?.latitude ?? last.latitude,
-        longitude: openSite?.longitude ?? last.longitude,
-        distanceMeters: 0,
-        auto: true,
-      ),
+      autoClose: closing(closeAt),
     );
   }
 
@@ -357,13 +718,23 @@ class AttendanceStore extends ChangeNotifier {
     return Duration(seconds: (meters / travelSpeedMetersPerSecond).round());
   }
 
-  /// Saves the worker's own [punch], after any check-out [plan] needs first,
-  /// as one write.
+  /// Saves the worker's own [punch], after anything [plan] needs first, as
+  /// one write.
   Future<void> recordPunch(PunchPlan plan, Punch punch) async {
-    final auto = plan.autoClose;
-    if (auto != null) _insertSorted(auto);
-    _insertSorted(punch);
-    await _savePunches();
+    final all = [?plan.autoClose, ?plan.autoOpen, punch];
+    _db.transaction(() => all.forEach(_db.insertPunch));
+    _moveWindow();
+    all.forEach(_index);
+    _changed();
+  }
+
+  /// Hours [workerId] worked at [projectId]'s locations on [day].
+  Duration workedOnProject(String workerId, String projectId, DateTime day) {
+    var total = Duration.zero;
+    workedBySiteIdOn(workerId, day).forEach((siteId, hours) {
+      if (siteById(siteId)?.projectId == projectId) total += hours;
+    });
+    return total;
   }
 
   /// Time on the clock minus time on break.
@@ -377,6 +748,13 @@ class AttendanceStore extends ChangeNotifier {
     String workerId,
     DateTime day, {
     required WorkerStatus counting,
+  }) =>
+      _span(punchesFor(workerId, day), day, counting: counting);
+
+  static Duration _span(
+    List<Punch> punches,
+    DateTime day, {
+    required WorkerStatus counting,
   }) {
     var total = Duration.zero;
     var state = WorkerStatus.off;
@@ -387,7 +765,7 @@ class AttendanceStore extends ChangeNotifier {
       if (from != null && state == counting) total += at.difference(from);
     }
 
-    for (final punch in punchesFor(workerId, day)) {
+    for (final punch in punches) {
       close(punch.at);
       state = switch (punch.type) {
         PunchType.checkIn || PunchType.breakEnd => WorkerStatus.working,
@@ -458,6 +836,8 @@ class AttendanceStore extends ChangeNotifier {
     final notIn = <Worker>[];
     final onLeave = <Worker>[];
     final afterShift = <(Worker, Site)>[];
+    final elsewhere = <(Worker, Site)>[];
+    final ownSites = {for (final s in sitesOf(projectId)) s.id};
     var total = Duration.zero;
     var travel = Duration.zero;
     var late = 0;
@@ -470,11 +850,14 @@ class AttendanceStore extends ChangeNotifier {
       final openToday = last != null &&
           last.type != PunchType.checkOut &&
           _isSameDay(last.at, at);
-      if (openToday) {
+      final site = openToday ? siteById(last.siteId) : null;
+      if (openToday && !ownSites.contains(last.siteId)) {
+        // On the clock, but for another of their projects.
+        if (site != null) elsewhere.add((w, site));
+      } else if (openToday) {
         (last.type == PunchType.breakStart ? onBreak : working)
             .putIfAbsent(last.siteId, () => [])
             .add(w);
-        final site = siteById(last.siteId);
         if (site != null && at.isAfter(site.shiftEndOn(at))) {
           afterShift.add((w, site));
         }
@@ -484,7 +867,9 @@ class AttendanceStore extends ChangeNotifier {
         notIn.add(w);
       }
 
+      // Only hours at this project's locations count here.
       workedBySiteIdOn(w.id, at).forEach((siteId, d) {
+        if (!ownSites.contains(siteId)) return;
         hours[siteId] = (hours[siteId] ?? Duration.zero) + d;
         total += d;
       });
@@ -507,6 +892,7 @@ class AttendanceStore extends ChangeNotifier {
       notIn: notIn,
       onLeave: onLeave,
       afterShift: afterShift,
+      elsewhere: elsewhere,
       totalHours: total,
       travel: travel,
       late: late,
@@ -541,7 +927,7 @@ class AttendanceStore extends ChangeNotifier {
     if (punches.isEmpty) return const ShiftFlags();
 
     final firstIn = _firstIn(punches);
-    final worked = workedOn(workerId, day);
+    final worked = _span(punches, day, counting: WorkerStatus.working);
 
     return ShiftFlags(
       late: firstIn.at.isAfter(_shiftStartFor(firstIn, day).add(lateGrace)),
@@ -616,24 +1002,48 @@ class AttendanceStore extends ChangeNotifier {
     return decision.approved ? RequestStatus.approved : RequestStatus.rejected;
   }
 
+  (int, int)? _pendingKey;
+  List<(Worker, DateTime)> _pending = const [];
+
   /// Days with overtime still to decide, newest first. Only finished days:
   /// overtime still growing today is decided once the worker checks out.
+  /// Covers the last [punchMemoryDays] days; an older day left undecided is
+  /// still in the database but no longer asks for a decision.
+  ///
+  /// Kept until something changes (or the day does): the supervisor home
+  /// asks for the count every second.
   List<(Worker, DateTime)> get pendingOvertime {
+    final key = (_version, dayKeyOf(DateTime.now()));
+    if (key == _pendingKey) return _pending;
+    final decided = {for (final d in _overtime) _overtimeId(d)};
     final result = <(Worker, DateTime)>[];
     for (final worker in _workers) {
-      final days = {
-        for (final p in _punches)
-          if (p.workerId == worker.id) DateTime(p.at.year, p.at.month, p.at.day),
-      };
-      for (final day in days) {
-        if (overtimeStatus(worker.id, day) == RequestStatus.pending &&
-            _dayOver(punchesFor(worker.id, day), day)) {
-          result.add((worker, day));
+      final mine = _byWorker[worker.id];
+      if (mine == null) continue;
+      var from = 0;
+      while (from < mine.length) {
+        final at = mine[from].at;
+        final day = DateTime(at.year, at.month, at.day);
+        final dayKey = dayKeyOf(at);
+        var to = from + 1;
+        while (to < mine.length && _isSameDay(mine[to].at, day)) {
+          to++;
         }
+        if (dayKey >= _loadedFromDay &&
+            !decided.contains('${worker.id}|$dayKey')) {
+          final punches = mine.sublist(from, to);
+          if (_dayOver(punches, day) &&
+              _span(punches, day, counting: WorkerStatus.working) >
+                  standardDay) {
+            result.add((worker, day));
+          }
+        }
+        from = to;
       }
     }
     result.sort((a, b) => b.$2.compareTo(a.$2));
-    return result;
+    _pendingKey = key;
+    return _pending = List.unmodifiable(result);
   }
 
   int get pendingOvertimeCount => pendingOvertime.length;
@@ -650,23 +1060,16 @@ class AttendanceStore extends ChangeNotifier {
     required bool approve,
   }) async {
     if (overtimeDecision(workerId, day) != null) return;
-    _overtime.add(OvertimeDecision(
+    final decision = OvertimeDecision(
       workerId: workerId,
       date: DateTime(day.year, day.month, day.day),
       approved: approve,
       minutes: approve ? overtimeOn(workerId, day).inMinutes : 0,
       decidedAt: DateTime.now(),
-    ));
-    await _saveOvertime();
-  }
-
-  Future<void> _saveOvertime() async {
-    if (_batching) return;
-    await _prefs.setStringList(
-      _overtimeKey,
-      _overtime.map((d) => jsonEncode(d.toJson())).toList(),
     );
-    notifyListeners();
+    _db.putRecord(_overtimeKey, _overtimeId(decision), decision.toJson());
+    _overtime.add(decision);
+    _changed();
   }
 
   /// Hours to pay for a day: up to 8 hours, plus overtime only as approved.
@@ -686,11 +1089,8 @@ class AttendanceStore extends ChangeNotifier {
   /// recorded, beyond a small tolerance: the clock was set back, which would
   /// let someone record a punch at a time they were not there.
   bool clockLooksWrong(DateTime now) {
-    if (_punches.isEmpty) return false;
-    var newest = _punches.first.at;
-    for (final p in _punches) {
-      if (p.at.isAfter(newest)) newest = p.at;
-    }
+    final newest = _newest;
+    if (newest == null) return false;
     return now.isBefore(newest.subtract(clockTolerance));
   }
 
@@ -737,8 +1137,9 @@ class AttendanceStore extends ChangeNotifier {
       status: RequestStatus.pending,
       requestedAt: now ?? DateTime.now(),
     );
+    _db.putRecord(_correctionsKey, request.id, request.toJson());
     _corrections.add(request);
-    await _saveCorrections();
+    _changed();
     return request;
   }
 
@@ -756,11 +1157,15 @@ class AttendanceStore extends ChangeNotifier {
     final request = _corrections[i];
 
     if (!approve) {
-      _corrections[i] = request.decided(RequestStatus.rejected, DateTime.now());
-      await _saveCorrections();
+      final rejected = request.decided(RequestStatus.rejected, DateTime.now());
+      _db.putRecord(_correctionsKey, rejected.id, rejected.toJson());
+      _corrections[i] = rejected;
+      _changed();
       return;
     }
 
+    // The whole day must be in memory to judge it.
+    ensureMonthLoaded(request.at.year, request.at.month);
     final day = punchesFor(request.workerId, request.at);
     final replaced = _punchReplacedBy(request, day);
     final site = siteById(request.siteId);
@@ -788,16 +1193,21 @@ class AttendanceStore extends ChangeNotifier {
       throw StateError('This correction does not fit the punches of that day');
     }
 
-    if (replaced != null) _punches.remove(replaced);
-    _insertSorted(corrected);
-    _corrections[i] = request.decided(
+    final approved = request.decided(
       RequestStatus.approved,
       DateTime.now(),
       replacedAt: replaced?.at,
       replacedAuto: replaced?.auto ?? false,
     );
-    await _savePunches();
-    await _saveCorrections();
+    _db.transaction(() {
+      if (replaced != null) _db.deletePunch(replaced);
+      _db.insertPunch(corrected);
+      _db.putRecord(_correctionsKey, approved.id, approved.toJson());
+    });
+    if (replaced != null) _unindex(replaced);
+    _index(corrected);
+    _corrections[i] = approved;
+    _changed();
   }
 
   Punch? _punchReplacedBy(CorrectionRequest request, List<Punch> day) {
@@ -852,50 +1262,57 @@ class AttendanceStore extends ChangeNotifier {
     return true;
   }
 
-  void _insertSorted(Punch punch) {
-    final at = _punches.indexWhere((p) => p.at.isAfter(punch.at));
-    if (at < 0) {
-      _punches.add(punch);
-    } else {
-      _punches.insert(at, punch);
-    }
-  }
-
-  Future<void> _saveCorrections() async {
-    if (_batching) return;
-    await _prefs.setStringList(
-      _correctionsKey,
-      _corrections.map((c) => jsonEncode(c.toJson())).toList(),
-    );
-    notifyListeners();
-  }
-
   // ------------------------------------------------------------- whole day
 
   // Passing [workerId] narrows any of these to that one person, which is how
   // a worker's own calendar shows only their own days.
 
-  List<Punch> punchesOn(DateTime day, {String? workerId}) => _punches
-      .where((p) =>
-          _isSameDay(p.at, day) && (workerId == null || p.workerId == workerId))
-      .toList(growable: false);
+  List<Punch> punchesOn(DateTime day, {String? workerId}) {
+    if (workerId != null) return punchesFor(workerId, day);
+    final all = _byDay[dayKeyOf(day)];
+    return all == null ? const [] : List.of(all, growable: false);
+  }
 
-  /// Day-of-month to hours worked, for the calendar grid.
+  (int, int?)? _monthCacheVersion;
+  final Map<(int, String?), Duration> _dayTotals = {};
+
+  /// Day-of-month to hours worked, for the calendar grid. Days before the
+  /// memory window count only once their month is loaded
+  /// ([ensureMonthLoaded]).
   Map<int, Duration> monthTotals(int year, int month, {String? workerId}) {
-    final people = workerId == null
-        ? _workers
-        : _workers.where((w) => w.id == workerId);
+    // Past days do not change until a punch does; only today is live.
+    final today = dayKeyOf(DateTime.now());
+    if (_monthCacheVersion != (_version, today)) {
+      _dayTotals.clear();
+      _monthCacheVersion = (_version, today);
+    }
+    final people = workerId == null ? null : {workerId};
     final result = <int, Duration>{};
-    for (final punch in _punches) {
-      if (punch.at.year != year || punch.at.month != month) continue;
-      if (workerId != null && punch.workerId != workerId) continue;
-      result.putIfAbsent(punch.at.day, () {
+    final daysInMonth = DateTime(year, month + 1, 0).day;
+    for (var d = 1; d <= daysInMonth; d++) {
+      final key = year * 10000 + month * 100 + d;
+      final punches = _byDay[key];
+      if (punches == null || !_dayLoaded(key)) continue;
+      if (people != null && !punches.any((p) => people.contains(p.workerId))) {
+        continue;
+      }
+      final day = DateTime(year, month, d);
+      Duration compute() {
+        final ids = {
+          for (final p in punches)
+            if (people == null || people.contains(p.workerId)) p.workerId,
+        };
         var total = Duration.zero;
-        for (final worker in people) {
-          total += workedOn(worker.id, punch.at);
+        for (final id in ids) {
+          // Punches of workers since removed still count, as before.
+          total += workedOn(id, day);
         }
         return total;
-      });
+      }
+
+      result[d] = key == today
+          ? compute()
+          : _dayTotals.putIfAbsent((key, workerId), compute);
     }
     return result;
   }
@@ -908,26 +1325,21 @@ class AttendanceStore extends ChangeNotifier {
   // ------------------------------------------------------------------ writes
 
   Future<void> add(Punch punch) async {
-    _insertSorted(punch);
-    await _savePunches();
-  }
-
-  Future<void> _savePunches() async {
-    if (_batching) return;
-    await _prefs.setStringList(
-      _punchesKey,
-      _punches.map((p) => jsonEncode(p.toJson())).toList(),
-    );
-    notifyListeners();
+    _db.insertPunch(punch);
+    _moveWindow();
+    _index(punch);
+    _changed();
   }
 
   Future<void> addWorker(Worker worker) async {
+    _db.putRecord(_workersKey, worker.id, worker.toJson());
     _workers.add(worker);
-    await _saveWorkers();
+    _changed();
   }
 
-  /// Puts [workerId] on [projectId] with a role and job. Moving to another
-  /// project is allowed; hours already recorded stay where they were worked.
+  /// Puts [workerId] on [projectId] with a role and job, or changes their
+  /// role and job there. Their other projects stay: a worker may be on
+  /// several, with a role and job on each.
   Future<void> assignWorker(
     String workerId, {
     required String projectId,
@@ -936,33 +1348,43 @@ class AttendanceStore extends ChangeNotifier {
   }) async {
     final i = _workers.indexWhere((w) => w.id == workerId);
     if (i < 0) return;
-    _workers[i] =
-        _workers[i].copyWith(projectId: projectId, role: role, job: job);
-    await _saveWorkers();
+    _replaceWorker(
+        i, _workers[i].withAssignment(projectId, role: role, job: job));
+  }
+
+  /// Takes [workerId] off [projectId]; hours already worked there stay.
+  /// False (and nothing changes) when it is their only project.
+  Future<bool> unassignWorker(String workerId, String projectId) async {
+    final i = _workers.indexWhere((w) => w.id == workerId);
+    if (i < 0) return false;
+    final updated = _workers[i].withoutProject(projectId);
+    if (updated == null) return false;
+    _replaceWorker(i, updated);
+    return true;
+  }
+
+  void _replaceWorker(int i, Worker updated) {
+    _db.putRecord(_workersKey, updated.id, updated.toJson());
+    _workers[i] = updated;
+    _changed();
   }
 
   Future<void> removeWorker(String id) async {
+    _db.deleteRecord(_workersKey, id);
     _workers.removeWhere((w) => w.id == id);
-    await _saveWorkers();
-  }
-
-  Future<void> _saveWorkers() async {
-    if (_batching) return;
-    await _prefs.setStringList(
-      _workersKey,
-      _workers.map((w) => jsonEncode(w.toJson())).toList(),
-    );
-    notifyListeners();
+    _changed();
   }
 
   Future<void> addSite(Site site) async {
+    _db.putRecord(_sitesKey, site.id, site.toJson());
     _sites.add(site);
-    await _saveSites();
+    _changed();
   }
 
   Future<void> removeSite(String id) async {
+    _db.deleteRecord(_sitesKey, id);
     _sites.removeWhere((s) => s.id == id);
-    await _saveSites();
+    _changed();
   }
 
   /// Changes a location's shift. Throws [ArgumentError] when it would end
@@ -973,9 +1395,11 @@ class AttendanceStore extends ChangeNotifier {
     }
     final i = _sites.indexWhere((s) => s.id == siteId);
     if (i < 0) return;
-    _sites[i] = _sites[i]
+    final updated = _sites[i]
         .copyWith(shiftStartMinutes: startMinutes, shiftEndMinutes: endMinutes);
-    await _saveSites();
+    _db.putRecord(_sitesKey, updated.id, updated.toJson());
+    _sites[i] = updated;
+    _changed();
   }
 
   // ---------------------------------------------------------------- projects
@@ -985,8 +1409,9 @@ class AttendanceStore extends ChangeNotifier {
       id: id ?? DateTime.now().microsecondsSinceEpoch.toString(),
       name: name.trim(),
     );
+    _db.putRecord(_projectsKey, project.id, project.toJson());
     _projects.add(project);
-    await _saveProjects();
+    _changed();
     return project;
   }
 
@@ -994,35 +1419,19 @@ class AttendanceStore extends ChangeNotifier {
   Future<void> updateProject(Project project) async {
     final i = _projects.indexWhere((p) => p.id == project.id);
     if (i < 0) return;
+    _db.putRecord(_projectsKey, project.id, project.toJson());
     _projects[i] = project;
-    await _saveProjects();
+    _changed();
   }
 
   /// Deletes a project, but only an empty one: removing a project that still
   /// has locations or workers would strand them where nobody can punch.
   Future<bool> removeProject(String id) async {
     if (sitesOf(id).isNotEmpty || workersOf(id).isNotEmpty) return false;
+    _db.deleteRecord(_projectsKey, id);
     _projects.removeWhere((p) => p.id == id);
-    await _saveProjects();
+    _changed();
     return true;
-  }
-
-  Future<void> _saveProjects() async {
-    if (_batching) return;
-    await _prefs.setStringList(
-      _projectsKey,
-      _projects.map((p) => jsonEncode(p.toJson())).toList(),
-    );
-    notifyListeners();
-  }
-
-  Future<void> _saveSites() async {
-    if (_batching) return;
-    await _prefs.setStringList(
-      _sitesKey,
-      _sites.map((s) => jsonEncode(s.toJson())).toList(),
-    );
-    notifyListeners();
   }
 
   // ------------------------------------------------------------------- leave
@@ -1032,15 +1441,27 @@ class AttendanceStore extends ChangeNotifier {
         [..._leaves]..sort((a, b) => b.from.compareTo(a.from)),
       );
 
+  /// Approved leave by worker; rebuilt after any change, because the
+  /// boards ask for every worker on every tick.
+  Map<String, List<LeaveRequest>>? _leavesByWorker;
+
+  Map<String, List<LeaveRequest>> get _approvedLeave {
+    final cached = _leavesByWorker;
+    if (cached != null) return cached;
+    final map = <String, List<LeaveRequest>>{};
+    for (final l in _leaves) {
+      if (l.status == LeaveStatus.approved) {
+        (map[l.workerId] ??= []).add(l);
+      }
+    }
+    return _leavesByWorker = map;
+  }
+
   /// The approved leave [workerId] is on that [day], if any. Pending and
   /// rejected requests do not make anyone absent.
   LeaveRequest? leaveOn(String workerId, DateTime day) {
-    for (final leave in _leaves) {
-      if (leave.workerId == workerId &&
-          leave.status == LeaveStatus.approved &&
-          leave.covers(day)) {
-        return leave;
-      }
+    for (final leave in _approvedLeave[workerId] ?? const <LeaveRequest>[]) {
+      if (leave.covers(day)) return leave;
     }
     return null;
   }
@@ -1106,8 +1527,9 @@ class AttendanceStore extends ChangeNotifier {
       status: LeaveStatus.pending,
       requestedAt: DateTime.now(),
     );
+    _db.putRecord(_leavesKey, leave.id, leave.toJson());
     _leaves.add(leave);
-    await _saveLeaves();
+    _changed();
     return leave;
   }
 
@@ -1116,31 +1538,28 @@ class AttendanceStore extends ChangeNotifier {
   Future<void> decideLeave(String id, {required bool approve}) async {
     final i = _leaves.indexWhere((l) => l.id == id);
     if (i < 0 || _leaves[i].status != LeaveStatus.pending) return;
-    _leaves[i] = _leaves[i].decided(
+    final decided = _leaves[i].decided(
       approve ? LeaveStatus.approved : LeaveStatus.rejected,
       DateTime.now(),
     );
-    await _saveLeaves();
+    _db.putRecord(_leavesKey, decided.id, decided.toJson());
+    _leaves[i] = decided;
+    _changed();
   }
 
   Future<void> removeLeave(String id) async {
+    _db.deleteRecord(_leavesKey, id);
     _leaves.removeWhere((l) => l.id == id);
-    await _saveLeaves();
-  }
-
-  Future<void> _saveLeaves() async {
-    if (_batching) return;
-    await _prefs.setStringList(
-      _leavesKey,
-      _leaves.map((l) => jsonEncode(l.toJson())).toList(),
-    );
-    notifyListeners();
+    _changed();
   }
 
   Future<void> clearPunches() async {
-    _punches.clear();
-    await _prefs.remove(_punchesKey);
-    notifyListeners();
+    _db.deleteAllPunches();
+    _byWorker.clear();
+    _byDay.clear();
+    _loadedMonths.clear();
+    _newest = null;
+    _changed();
   }
 
   static bool _isSameDay(DateTime a, DateTime b) =>
@@ -1171,6 +1590,7 @@ class ProjectToday {
     required this.notIn,
     required this.onLeave,
     this.afterShift = const [],
+    this.elsewhere = const [],
     required this.totalHours,
     required this.travel,
     required this.late,
@@ -1186,6 +1606,10 @@ class ProjectToday {
   /// Still checked in at a location whose shift has already ended: likely a
   /// forgotten check-out, worth a call before it becomes an auto check-out.
   final List<(Worker, Site)> afterShift;
+
+  /// On this project too, but on the clock right now at a location of
+  /// another of their projects.
+  final List<(Worker, Site)> elsewhere;
   final Duration totalHours;
   final Duration travel;
   final int late;

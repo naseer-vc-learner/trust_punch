@@ -281,7 +281,13 @@ class _CorrectionDialogState extends State<_CorrectionDialog> {
 
   List<Site> get _sites {
     final worker = _worker;
-    return worker == null ? const [] : widget.store.sitesOf(worker.projectId);
+    // The locations of every project they are on.
+    return worker == null
+        ? const []
+        : [
+            for (final s in widget.store.sites)
+              if (widget.store.canPunchAt(worker, s)) s,
+          ];
   }
 
   @override
@@ -419,7 +425,15 @@ class _CorrectionDialogState extends State<_CorrectionDialog> {
             decoration: InputDecoration(labelText: t(lang, T.locationLabel)),
             items: [
               for (final s in _sites)
-                DropdownMenuItem(value: s.id, child: Text(s.name)),
+                DropdownMenuItem(
+                  value: s.id,
+                  // Two projects can share a place (and its name).
+                  child: Text(
+                    '${s.name} · '
+                    '${widget.store.projectById(s.projectId)?.name ?? ''}',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
             ],
             onChanged: (id) =>
                 setState(() => _site = _sites.firstWhere((s) => s.id == id)),

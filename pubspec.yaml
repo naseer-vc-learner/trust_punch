@@ -54,6 +54,11 @@ dependencies:
   # needs internet, supervisor screens only).
   flutter_map: 8.3.2
   latlong2: 0.10.1
+  # Durable storage for punches and records: one row per change instead of
+  # rewriting everything (shared_preferences cannot keep up with a busy
+  # gate). SQLite through dart:ffi; 3.x bundles SQLite itself via build hooks.
+  # 3.5.2 is the newest that resolves with Flutter 3.44 (3.6+ needs newer meta).
+  sqlite3: 3.5.2
 
 dev_dependencies:
   flutter_test:

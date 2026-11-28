@@ -13,6 +13,9 @@ import '../store/attendance_store.dart';
 /// have no face data, so no real face can ever match them at a check-in.
 
 const demoProjectId = 'demo-project';
+
+/// A second demo project sharing Gate A, with an evening shift.
+const demoEveningProjectId = 'demo-project-evening';
 const _demoPrefix = 'demo-';
 
 bool hasDemoData(AttendanceStore store) =>
@@ -38,6 +41,19 @@ const _gateB = Site(
   shiftEndMinutes: 17 * 60,
 );
 
+// The same place as Gate A, for the evening project: two location records,
+// one per project, each with its own shift. The shift decides which project
+// a punch here belongs to.
+const _gateAEvening = Site(
+  id: 'demo-site-a-evening',
+  name: 'Gate A (demo)',
+  latitude: 25.2048,
+  longitude: 55.2708,
+  projectId: demoEveningProjectId,
+  shiftStartMinutes: 16 * 60,
+  shiftEndMinutes: 22 * 60,
+);
+
 Worker _worker(String n, String name, String role, String job) => Worker(
   id: '${_demoPrefix}w$n',
   employeeId: 'D-10$n',
@@ -51,7 +67,9 @@ Worker _worker(String n, String name, String role, String job) => Worker(
 final _asha = _worker('1', 'Asha', 'Mason', 'Block A foundation');
 final _ravi = _worker('2', 'Ravi', 'Electrician', 'Block B MEP');
 final _imran = _worker('3', 'Imran', 'Helper', 'Block A foundation');
-final _joseph = _worker('4', 'Joseph', 'Foreman', 'Facade');
+// Joseph is on both projects: Foreman by day, Supervisor in the evening.
+final _joseph = _worker('4', 'Joseph', 'Foreman', 'Facade')
+    .withAssignment(demoEveningProjectId, role: 'Supervisor', job: 'Night pour');
 final _kumar = _worker('5', 'Kumar', 'Helper', 'Facade');
 
 /// Loads the demo week ending at [now]. Does nothing if it is already there.
@@ -76,6 +94,14 @@ Future<void> loadDemoData(AttendanceStore store, {DateTime? now}) async {
     );
     await store.addSite(_gateA);
     await store.addSite(_gateB);
+    await store.addProject('Marina Villas evening (demo)',
+        id: demoEveningProjectId);
+    await store.updateProject(
+      store
+          .projectById(demoEveningProjectId)!
+          .copyWith(jobs: ['Night pour'], roles: ['Supervisor']),
+    );
+    await store.addSite(_gateAEvening);
     for (final w in [_asha, _ravi, _imran, _joseph, _kumar]) {
       await store.addWorker(w);
     }
@@ -174,8 +200,11 @@ Future<void> loadDemoData(AttendanceStore store, {DateTime? now}) async {
       );
 
       // Joseph: Gate A; forgets to check out once, closed at shift end on
-      // his next check-in, and asks for a correction.
+      // his next check-in, and asks for a correction. One day he stays on
+      // for the evening project at the same gate and checks out at 20:00:
+      // the app splits the session at 16:00, day project to evening project.
       final forgets = i == days.length - 3;
+      final staysOn = i == 0;
       await punch(
         _joseph,
         PunchType.checkIn,
@@ -184,6 +213,13 @@ Future<void> loadDemoData(AttendanceStore store, {DateTime? now}) async {
       );
       if (forgets) {
         forgotDayJoseph = day;
+      } else if (staysOn) {
+        await punch(
+          _joseph,
+          PunchType.checkOut,
+          _gateAEvening,
+          t(day, 20).add(jitter(6)),
+        );
       } else {
         await punch(
           _joseph,
@@ -271,9 +307,11 @@ Future<void> removeDemoData(AttendanceStore store) async {
     for (final id in ids) {
       await store.removeWorker(id);
     }
-    for (final site in store.sitesOf(demoProjectId)) {
-      await store.removeSite(site.id);
+    for (final project in [demoProjectId, demoEveningProjectId]) {
+      for (final site in store.sitesOf(project)) {
+        await store.removeSite(site.id);
+      }
+      await store.removeProject(project);
     }
-    await store.removeProject(demoProjectId);
   });
 }

@@ -97,6 +97,18 @@ void main() {
     expect(today.late, greaterThanOrEqualTo(1)); // Ravi at 08:22
   });
 
+  test('Joseph stays on for the evening project: hours split at 16:00', () {
+    final joseph = store.workers.firstWhere((w) => w.name == 'Joseph');
+    expect(joseph.isOn(demoEveningProjectId), isTrue);
+    final evening = [
+      for (var d = 1; d < 7; d++)
+        store.workedOnProject(joseph.id, demoEveningProjectId,
+            _today.subtract(Duration(days: d))),
+    ].where((h) => h > Duration.zero);
+    expect(evening, hasLength(1));
+    expect(evening.single, greaterThan(const Duration(hours: 3)));
+  });
+
   test('the correction waiting fits its day when approved', () async {
     final request = store.corrections
         .firstWhere((c) => c.status == RequestStatus.pending);
@@ -124,5 +136,6 @@ void main() {
     final reloaded = await AttendanceStore.load();
     expect(reloaded.workers.map((w) => w.id), ['real-1']);
     expect(reloaded.projectById(demoProjectId), isNull);
+    expect(reloaded.projectById(demoEveningProjectId), isNull);
   });
 }

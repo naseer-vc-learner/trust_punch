@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:trust_punch/src/models/attendance.dart';
 import 'package:trust_punch/src/models/project.dart';
+import 'package:trust_punch/src/store/attendance_database.dart';
 import 'package:trust_punch/src/store/attendance_store.dart';
 
 // Two locations about 5 km apart: ~10 minutes at the assumed 30 km/h.
@@ -193,6 +194,9 @@ void main() {
   });
 
   test('old sites and workers move into the General project', () async {
+    // An install from before projects: everything still in preferences,
+    // nothing in the database yet.
+    AttendanceDatabase.debugUse(AttendanceDatabase.inMemory());
     SharedPreferences.setMockInitialValues({
       'flutter.sites': [
         jsonEncode({'id': 's1', 'name': 'Old gate', 'lat': 1.0, 'lng': 2.0}),

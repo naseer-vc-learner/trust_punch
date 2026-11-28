@@ -120,6 +120,7 @@ enum T {
   personalPhoneHelp,
   // Multi-location punching, seen by workers: all six languages.
   notYourSite,
+  whichProject,
   autoCheckedOut,
   travel,
   autoCheckoutFlag,
@@ -176,6 +177,13 @@ enum T {
   replacedLabel,
   afterShift,
   showOnMap,
+  // Several projects per worker, English-only (supervisor screens).
+  removeFromProject,
+  onlyProject,
+  useOtherLocation,
+  samePlaceAs,
+  atOtherProject,
+  onThisProject,
   checkOnMap,
   mapNeedsInternet,
   mapCircleHelp,
@@ -307,6 +315,7 @@ const _ui = <String, Map<T, String>>{
     T.personalPhoneHelp:
         'Used by the "My own phone" role: only this worker\'s face is accepted.',
     T.notYourSite: 'This is not your project\'s location',
+    T.whichProject: 'Which project are you working on now?',
     T.autoCheckedOut: '{site}: automatic check-out at',
     T.travel: 'Travel',
     T.autoCheckoutFlag: 'Auto check-out',
@@ -367,6 +376,12 @@ const _ui = <String, Map<T, String>>{
     T.replacedLabel: 'replaced',
     T.afterShift: 'Still in after shift end',
     T.showOnMap: 'Map',
+    T.removeFromProject: 'Remove from this project',
+    T.onlyProject: 'This is their only project. To take them off it, remove the worker.',
+    T.useOtherLocation: 'Same place as another project',
+    T.samePlaceAs: 'Pick the location this one shares (its own shift comes next).',
+    T.atOtherProject: 'At another project now',
+    T.onThisProject: 'This project',
     T.checkOnMap: 'Check on map',
     T.mapNeedsInternet:
         'The map needs internet. Everything else works offline.',
@@ -455,6 +470,7 @@ const _ui = <String, Map<T, String>>{
     T.askSupervisor:
         'इस फोन पर अपना चेहरा दर्ज कराने के लिए अपने सुपरवाइज़र से कहें।',
     T.notYourSite: 'यह आपके प्रोजेक्ट की जगह नहीं है',
+    T.whichProject: 'अभी आप किस प्रोजेक्ट पर काम कर रहे हैं?',
     T.autoCheckedOut: '{site}: स्वचालित चेक-आउट, समय',
     T.travel: 'यात्रा',
     T.autoCheckoutFlag: 'स्वचालित चेक-आउट',
@@ -541,6 +557,7 @@ const _ui = <String, Map<T, String>>{
     T.askSupervisor:
         'ഈ ഫോണിൽ നിങ്ങളുടെ മുഖം രജിസ്റ്റർ ചെയ്യാൻ സൂപ്പർവൈസറോട് പറയുക.',
     T.notYourSite: 'ഇത് നിങ്ങളുടെ പ്രോജക്റ്റിന്റെ സ്ഥലമല്ല',
+    T.whichProject: 'ഇപ്പോൾ ഏത് പ്രോജക്റ്റിലാണ് നിങ്ങൾ ജോലി ചെയ്യുന്നത്?',
     T.autoCheckedOut: '{site}: സ്വയം ചെക്ക്-ഔട്ട്, സമയം',
     T.travel: 'യാത്ര',
     T.autoCheckoutFlag: 'സ്വയം ചെക്ക്-ഔട്ട്',
@@ -628,6 +645,7 @@ const _ui = <String, Map<T, String>>{
     T.askSupervisor:
         'இந்த ஃபோனில் உங்கள் முகத்தைப் பதிவு செய்ய மேற்பார்வையாளரிடம் கேளுங்கள்.',
     T.notYourSite: 'இது உங்கள் திட்டத்தின் இடம் அல்ல',
+    T.whichProject: 'இப்போது எந்தத் திட்டத்தில் வேலை செய்கிறீர்கள்?',
     T.autoCheckedOut: '{site}: தானியங்கி வெளியேற்றம், நேரம்',
     T.travel: 'பயணம்',
     T.autoCheckoutFlag: 'தானியங்கி வெளியேற்றம்',
@@ -715,6 +733,7 @@ const _ui = <String, Map<T, String>>{
     T.askSupervisor:
         'اس فون پر اپنا چہرہ رجسٹر کروانے کے لیے اپنے سپروائزر سے کہیں۔',
     T.notYourSite: 'یہ آپ کے پروجیکٹ کی جگہ نہیں ہے',
+    T.whichProject: 'آپ ابھی کس پروجیکٹ پر کام کر رہے ہیں؟',
     T.autoCheckedOut: '{site}: خودکار چیک آؤٹ، وقت',
     T.travel: 'سفر',
     T.autoCheckoutFlag: 'خودکار چیک آؤٹ',
@@ -800,6 +819,7 @@ const _ui = <String, Map<T, String>>{
     T.myAttendance: 'আমার হাজিরা',
     T.askSupervisor: 'এই ফোনে আপনার মুখ নিবন্ধন করতে আপনার সুপারভাইজারকে বলুন।',
     T.notYourSite: 'এটি আপনার প্রকল্পের জায়গা নয়',
+    T.whichProject: 'আপনি এখন কোন প্রকল্পে কাজ করছেন?',
     T.autoCheckedOut: '{site}: স্বয়ংক্রিয় চেক-আউট, সময়',
     T.travel: 'যাতায়াত',
     T.autoCheckoutFlag: 'স্বয়ংক্রিয় চেক-আউট',

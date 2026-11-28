@@ -223,14 +223,17 @@ class _WorkersScreenState extends State<WorkersScreen> {
                                 child: Text(worker.name.characters.first),
                               ),
                               title: Text(worker.name),
+                              // One line per project: name, role, job.
                               subtitle: Text([
                                 if (worker.employeeId.isNotEmpty)
                                   worker.employeeId,
-                                store.projectById(worker.projectId)?.name ??
-                                    '',
-                                if (worker.role.isNotEmpty) worker.role,
-                                if (worker.job.isNotEmpty) worker.job,
-                              ].where((s) => s.isNotEmpty).join(' · ')),
+                                for (final a in worker.assignments)
+                                  [
+                                    store.projectById(a.projectId)?.name ?? '',
+                                    a.role,
+                                    a.job,
+                                  ].where((s) => s.isNotEmpty).join(' · '),
+                              ].where((s) => s.isNotEmpty).join('\n')),
                               trailing: IconButton(
                                 icon: const Icon(Icons.delete_outline),
                                 onPressed: () => store.removeWorker(worker.id),

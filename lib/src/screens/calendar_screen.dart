@@ -51,7 +51,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
   }
 
   void _shiftMonth(int delta) {
-    setState(() => _month = DateTime(_month.year, _month.month + delta));
+    final month = DateTime(_month.year, _month.month + delta);
+    // Months older than the store keeps in memory are read on demand.
+    widget.store.ensureMonthLoaded(month.year, month.month);
+    setState(() => _month = month);
   }
 
   /// Wipes every punch on the phone: supervisor PIN first, then an explicit

@@ -6,6 +6,30 @@ enum PunchType { checkIn, breakStart, breakEnd, checkOut }
 /// Where a worker stands right now. Decides which punches are legal next.
 enum WorkerStatus { off, working, onBreak }
 
+/// A worker's place on one project: their role there and their job
+/// (activity).
+class ProjectAssignment {
+  const ProjectAssignment({
+    required this.projectId,
+    this.role = '',
+    this.job = '',
+  });
+
+  final String projectId;
+  final String role;
+  final String job;
+
+  Map<String, dynamic> toJson() =>
+      {'projectId': projectId, 'role': role, 'job': job};
+
+  factory ProjectAssignment.fromJson(Map<String, dynamic> json) =>
+      ProjectAssignment(
+        projectId: json['projectId'] as String,
+        role: json['role'] as String? ?? '',
+        job: json['job'] as String? ?? '',
+      );
+}
+
 class Worker {
   const Worker({
     required this.id,
@@ -15,6 +39,7 @@ class Worker {
     this.projectId = '',
     this.role = '',
     this.job = '',
+    this.otherProjects = const [],
   });
 
   final String id;
@@ -27,15 +52,80 @@ class Worker {
   /// One face embedding per enrolled angle.
   final List<List<double>> embeddings;
 
-  /// The project this worker is on. They can punch at any of its locations
-  /// and none of anyone else's.
+  /// The worker's first project, with their [role] and [job] there. They can
+  /// punch at the locations of this and [otherProjects], nowhere else.
   final String projectId;
 
-  /// Their role on the project (e.g. Mason) and current job/activity.
+  /// Their role on [projectId] (e.g. Mason) and current job/activity.
   final String role;
   final String job;
 
-  Worker copyWith({String? projectId, String? role, String? job}) => Worker(
+  /// Further projects, each with its own role and job.
+  final List<ProjectAssignment> otherProjects;
+
+  /// Every project this worker is on, first project first.
+  List<ProjectAssignment> get assignments => [
+        if (projectId.isNotEmpty)
+          ProjectAssignment(projectId: projectId, role: role, job: job),
+        ...otherProjects,
+      ];
+
+  bool isOn(String project) =>
+      project.isNotEmpty &&
+      (projectId == project || otherProjects.any((a) => a.projectId == project));
+
+  /// Role and job on [project]; null when not on it.
+  ProjectAssignment? assignmentIn(String project) {
+    for (final a in assignments) {
+      if (a.projectId == project) return a;
+    }
+    return null;
+  }
+
+  /// Puts the worker on [project] with this role and job, or changes them
+  /// there. Other projects stay as they are.
+  Worker withAssignment(String project, {String role = '', String job = ''}) {
+    if (projectId.isEmpty || projectId == project) {
+      return copyWith(projectId: project, role: role, job: job);
+    }
+    final updated = ProjectAssignment(projectId: project, role: role, job: job);
+    final i = otherProjects.indexWhere((a) => a.projectId == project);
+    return copyWith(
+      otherProjects: [
+        for (final a in otherProjects) a.projectId == project ? updated : a,
+        if (i < 0) updated,
+      ],
+    );
+  }
+
+  /// Takes the worker off [project]. Null when it is their only project: a
+  /// worker on no project could not punch anywhere.
+  Worker? withoutProject(String project) {
+    if (!isOn(project) || assignments.length == 1) return null;
+    if (projectId != project) {
+      return copyWith(
+        otherProjects: [
+          for (final a in otherProjects)
+            if (a.projectId != project) a,
+        ],
+      );
+    }
+    final next = otherProjects.first;
+    return copyWith(
+      projectId: next.projectId,
+      role: next.role,
+      job: next.job,
+      otherProjects: otherProjects.sublist(1),
+    );
+  }
+
+  Worker copyWith({
+    String? projectId,
+    String? role,
+    String? job,
+    List<ProjectAssignment>? otherProjects,
+  }) =>
+      Worker(
         id: id,
         employeeId: employeeId,
         name: name,
@@ -43,6 +133,7 @@ class Worker {
         projectId: projectId ?? this.projectId,
         role: role ?? this.role,
         job: job ?? this.job,
+        otherProjects: otherProjects ?? this.otherProjects,
       );
 
   /// Highest similarity against any enrolled angle of this worker.
@@ -63,6 +154,8 @@ class Worker {
         'projectId': projectId,
         'role': role,
         'job': job,
+        if (otherProjects.isNotEmpty)
+          'otherProjects': [for (final a in otherProjects) a.toJson()],
       };
 
   factory Worker.fromJson(Map<String, dynamic> json) => Worker(
@@ -75,6 +168,10 @@ class Worker {
         projectId: json['projectId'] as String? ?? '',
         role: json['role'] as String? ?? '',
         job: json['job'] as String? ?? '',
+        otherProjects: [
+          for (final a in json['otherProjects'] as List? ?? const [])
+            ProjectAssignment.fromJson(a as Map<String, dynamic>),
+        ],
       );
 }
 

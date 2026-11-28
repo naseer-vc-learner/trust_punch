@@ -271,10 +271,11 @@ class _ProjectScreenState extends State<ProjectScreen> {
     projectId: widget.projectId,
   );
 
-  /// Moves a worker from another project onto this one.
+  /// Adds a worker already on another project to this one too. They keep
+  /// their other projects, each with its own role and job.
   Future<void> _addExisting() async {
     final others = _store.workers
-        .where((w) => w.projectId != widget.projectId)
+        .where((w) => !w.isOn(widget.projectId))
         .toList();
     if (others.isEmpty) {
       showSnack(context, t(_lang, T.noWorkers));
@@ -289,7 +290,11 @@ class _ProjectScreenState extends State<ProjectScreen> {
             SimpleDialogOption(
               onPressed: () => Navigator.pop(context, w),
               child: Text(
-                '${w.name} · ${_store.projectById(w.projectId)?.name ?? ''}',
+                [
+                  w.name,
+                  for (final a in w.assignments)
+                    _store.projectById(a.projectId)?.name ?? '',
+                ].join(' · '),
               ),
             ),
         ],
@@ -306,8 +311,8 @@ class _ProjectScreenState extends State<ProjectScreen> {
       context,
       lang: _lang,
       project: project,
-      role: worker.projectId == project.id ? worker.role : '',
-      job: worker.projectId == project.id ? worker.job : '',
+      role: worker.assignmentIn(project.id)?.role ?? '',
+      job: worker.assignmentIn(project.id)?.job ?? '',
     );
     if (choice == null) return;
     await _store.assignWorker(
@@ -315,6 +320,62 @@ class _ProjectScreenState extends State<ProjectScreen> {
       projectId: project.id,
       role: choice.$1,
       job: choice.$2,
+    );
+  }
+
+  /// Takes a worker off this project only; their other projects and the
+  /// hours already worked here stay.
+  Future<void> _removeFromProject(Worker worker) async {
+    final removed = await _store.unassignWorker(worker.id, widget.projectId);
+    if (!removed && mounted) showSnack(context, t(_lang, T.onlyProject));
+  }
+
+  /// Adds a location at the same place as another project's location, with
+  /// its own shift: the shift then decides which project a punch there
+  /// belongs to.
+  Future<void> _addSharedLocation() async {
+    final others = [
+      for (final s in _store.sites)
+        if (s.projectId != widget.projectId) s,
+    ];
+    if (others.isEmpty) {
+      showSnack(context, t(_lang, T.noLocationsYet));
+      return;
+    }
+    final source = await showDialog<Site>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: Text(t(_lang, T.useOtherLocation)),
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Text(t(_lang, T.samePlaceAs)),
+          ),
+          for (final s in others)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, s),
+              child: Text(
+                '${s.name} · ${_store.projectById(s.projectId)?.name ?? ''} · '
+                '${formatShiftTime(s.shiftStartMinutes)}–'
+                '${formatShiftTime(s.shiftEndMinutes)}',
+              ),
+            ),
+        ],
+      ),
+    );
+    if (source == null || !mounted) return;
+    final shift = await askShift(context, lang: _lang);
+    if (shift == null || !mounted) return;
+    await _store.addSite(
+      Site(
+        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        name: source.name,
+        latitude: source.latitude,
+        longitude: source.longitude,
+        projectId: widget.projectId,
+        shiftStartMinutes: shift.$1,
+        shiftEndMinutes: shift.$2,
+      ),
     );
   }
 
@@ -437,6 +498,11 @@ class _ProjectScreenState extends State<ProjectScreen> {
                           icon: const Icon(Icons.edit_location_alt_outlined),
                           label: Text(t(_lang, T.enterCoordinates)),
                         ),
+                        OutlinedButton.icon(
+                          onPressed: _locating ? null : _addSharedLocation,
+                          icon: const Icon(Icons.share_location),
+                          label: Text(t(_lang, T.useOtherLocation)),
+                        ),
                         if (sites.isNotEmpty)
                           OutlinedButton.icon(
                             onPressed: () => Navigator.of(context).push(
@@ -476,11 +542,24 @@ class _ProjectScreenState extends State<ProjectScreen> {
                           title: Text(w.name),
                           subtitle: Text(
                             [
-                              if (w.role.isNotEmpty) w.role,
-                              if (w.job.isNotEmpty) w.job,
+                              if (w.assignmentIn(project.id) case final a?) ...[
+                                if (a.role.isNotEmpty) a.role,
+                                if (a.job.isNotEmpty) a.job,
+                              ],
+                              // Their other projects, so nobody is surprised
+                              // to see them on another board.
+                              for (final a in w.assignments)
+                                if (a.projectId != project.id)
+                                  '+ ${_store.projectById(a.projectId)?.name ?? ''}',
                             ].join(' · '),
                           ),
-                          trailing: const Icon(Icons.edit_outlined),
+                          trailing: w.assignments.length > 1
+                              ? IconButton(
+                                  tooltip: t(_lang, T.removeFromProject),
+                                  icon: const Icon(Icons.person_remove_outlined),
+                                  onPressed: () => _removeFromProject(w),
+                                )
+                              : const Icon(Icons.edit_outlined),
                           onTap: () => _editAssignment(w),
                         ),
                       ),
@@ -663,13 +742,38 @@ class _TodayTab extends StatelessWidget {
                 ),
               ),
             ],
+            if (today.elsewhere.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(t(lang, T.atOtherProject), style: text.titleSmall),
+                      for (final (w, site) in today.elsewhere)
+                        Text(
+                          '${w.name} · '
+                          '${store.projectById(site.projectId)?.name ?? ''} · '
+                          '${site.name}',
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 8),
             Text(t(lang, T.peopleToday), style: text.titleSmall),
             for (final w in store.workersOf(projectId))
               if (store.punchesFor(w.id, DateTime.now()).isNotEmpty)
                 _PersonRow(
                   worker: w,
+                  role: w.assignmentIn(projectId)?.role ?? '',
                   day: store.workerDay(w.id, DateTime.now()),
+                  // Shown when they also worked for another project today.
+                  hereOnly: w.assignments.length > 1
+                      ? store.workedOnProject(w.id, projectId, DateTime.now())
+                      : null,
                   lang: lang,
                 ),
             if (today.notIn.isNotEmpty) ...[
@@ -696,13 +800,22 @@ class _TodayTab extends StatelessWidget {
 class _PersonRow extends StatelessWidget {
   const _PersonRow({
     required this.worker,
+    required this.role,
     required this.day,
     required this.lang,
+    this.hereOnly,
   });
 
   final Worker worker;
+
+  /// Their role on this project.
+  final String role;
   final WorkerDay day;
   final String lang;
+
+  /// Hours at this project's locations, for someone on several projects;
+  /// the other figures are their whole day.
+  final Duration? hereOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -720,9 +833,7 @@ class _PersonRow extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              worker.role.isEmpty
-                  ? worker.name
-                  : '${worker.name} · ${worker.role}',
+              role.isEmpty ? worker.name : '${worker.name} · $role',
               style: text.titleMedium,
             ),
             const SizedBox(height: 4),
@@ -753,6 +864,11 @@ class _PersonRow extends StatelessWidget {
                   '${t(lang, T.workedToday)} ${formatHours(day.worked)}',
                   scheme.primaryContainer,
                 ),
+                if (hereOnly case final here?)
+                  _Tag(
+                    '${t(lang, T.onThisProject)} ${formatHours(here)}',
+                    scheme.secondaryContainer,
+                  ),
                 if (status != null)
                   _Tag(
                     '${t(lang, T.overtimeLabel)} ${formatHours(day.overtime)}'

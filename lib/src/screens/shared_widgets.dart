@@ -311,12 +311,15 @@ class WorkerCard extends StatelessWidget {
     final onLeave = store.leaveOn(worker.id, today) != null;
     final flags = store.flagsFor(worker.id, today);
     final travel = store.travelOn(worker.id, today);
-    final project = store.projectById(worker.projectId);
+    // Role · job · project, one line per project the worker is on.
     final assignment = [
-      if (worker.role.isNotEmpty) worker.role,
-      if (worker.job.isNotEmpty) worker.job,
-      if (project != null) project.name,
-    ].join(' · ');
+      for (final a in worker.assignments)
+        [
+          a.role,
+          a.job,
+          store.projectById(a.projectId)?.name ?? '',
+        ].where((s) => s.isNotEmpty).join(' · '),
+    ].where((s) => s.isNotEmpty).join('\n');
 
     final scheme = Theme.of(context).colorScheme;
     final (color, icon, label) = switch (status) {

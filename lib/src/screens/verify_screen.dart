@@ -43,7 +43,7 @@ class PunchIntent {
   final Uint8List? photo;
 }
 
-enum _Stage { checking, blocked, liveness, matching, choosing }
+enum _Stage { checking, blocked, liveness, matching, choosingProject, choosing }
 
 /// Proves four things in order: the phone is trustworthy, you are at a site,
 /// you are a live person, and you are someone this phone knows.
@@ -79,6 +79,13 @@ class _VerifyScreenState extends State<VerifyScreen> {
   String _hint = '';
   Site? _site;
   double _distance = 0;
+
+  /// Every location in range, nearest first; which one the punch belongs
+  /// to is decided once we know who it is (see [AttendanceStore.siteFor]).
+  List<SiteDistance> _inRange = const [];
+
+  /// Only when two projects' shifts overlap here: the worker picks.
+  List<Site> _projectOptions = const [];
   LocationFix? _fix;
   Worker? _worker;
   bool _passed = false;
@@ -157,6 +164,7 @@ class _VerifyScreenState extends State<VerifyScreen> {
       final nearest = ranked.first;
       _site = nearest.site;
       _distance = nearest.meters;
+      _inRange = [for (final r in ranked) if (r.inRange) r];
 
       if (!nearest.inRange) {
         _block(
@@ -236,24 +244,46 @@ class _VerifyScreenState extends State<VerifyScreen> {
       }
       _worker = match.worker;
 
-      // Hours may only land on the worker's own project.
-      if (!widget.store.canPunchAt(match.worker, _site!)) {
+      // Hours may only land on the worker's own projects. Where several of
+      // their projects share this place, the shift decides which.
+      final choice = widget.store.siteFor(
+        match.worker,
+        [for (final r in _inRange) r.site],
+      );
+      final site = choice.site;
+      if (site != null) {
+        _plan(site);
+      } else if (choice.options.isNotEmpty) {
+        setState(() {
+          _projectOptions = choice.options;
+          _stage = _Stage.choosingProject;
+        });
+      } else {
         _block('${match.worker.name}: ${t(_lang, T.notYourSite)}',
             Phrase.tooFar);
-        return;
       }
-
-      // Checked in elsewhere? The plan closes that location first (see
-      // AttendanceStore.planAt), so the only move here is a check-in.
-      final actions = widget.store.planAt(match.worker.id, _site!).actions;
-      if (actions.length == 1) {
-        _finish(actions.first);
-        return;
-      }
-      setState(() => _stage = _Stage.choosing);
     } catch (e) {
       _block('$e');
     }
+  }
+
+  /// The punch belongs to [site]: take the only legal move, or ask.
+  void _plan(Site site) {
+    final worker = _worker;
+    if (worker == null) return;
+    _site = site;
+    _distance = _inRange
+        .firstWhere((r) => r.site.id == site.id,
+            orElse: () => _inRange.first)
+        .meters;
+    // Checked in elsewhere? The plan closes that location first (see
+    // AttendanceStore.planAt), so the only move here is a check-in.
+    final actions = widget.store.planAt(worker.id, site).actions;
+    if (actions.length == 1) {
+      _finish(actions.first);
+      return;
+    }
+    setState(() => _stage = _Stage.choosing);
   }
 
   void _finish(PunchType type) {
@@ -300,6 +330,7 @@ class _VerifyScreenState extends State<VerifyScreen> {
         // Drawn above, as a full red screen.
         _Stage.blocked => const SizedBox.shrink(),
         _Stage.liveness => _buildLiveness(),
+        _Stage.choosingProject => _buildProjectChoice(),
         _Stage.choosing => _buildChoice(),
       },
     );
@@ -340,6 +371,39 @@ class _VerifyScreenState extends State<VerifyScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  /// Only reached when two of the worker's projects share this place and
+  /// both shifts are running: one big button per project.
+  Widget _buildProjectChoice() {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.apartment, size: 64),
+          const SizedBox(height: 12),
+          Text(
+            _worker?.name ?? '',
+            style: Theme.of(context).textTheme.headlineMedium,
+          ),
+          const SizedBox(height: 4),
+          Text(t(_lang, T.whichProject), textAlign: TextAlign.center),
+          const SizedBox(height: 32),
+          for (final site in _projectOptions) ...[
+            _ChoiceButton(
+              color: Theme.of(context).colorScheme.primary,
+              icon: Icons.apartment,
+              label: '${widget.store.projectById(site.projectId)?.name ?? site.name}\n'
+                  '${formatShiftTime(site.shiftStartMinutes)}–'
+                  '${formatShiftTime(site.shiftEndMinutes)}',
+              onPressed: () => _plan(site),
+            ),
+            const SizedBox(height: 16),
+          ],
+        ],
+      ),
     );
   }
 
