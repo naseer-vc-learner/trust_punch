@@ -1099,39 +1099,73 @@ git switch main && git pull --ff-only
 
 ### Day 3 — Users, passwords, sessions
 
-**Build**
-- `users` and `sessions` tables.
+**Built** (written and verified; you run the commands below):
+- **Tables:** `users` and `sessions` (migration `0003`), written with **SQLAlchemy Core** (`models.py` per module), so they run unchanged on PostgreSQL. `tests/test_models_match_migrations.py` fails if a model and its migration drift apart.
 - **Passwords:**
-  - argon2id with the library defaults.
-  - At least 12 characters, checked against a local list of common passwords.
-- **Login:**
-  - `POST /v1/auth/login` → access token (15 min) + refresh token (30 days).
-  - Both are stored as SHA-256 hashes.
-  - Refresh rotates the token. Reusing an old refresh token revokes the whole family.
-- Logout, change password.
-- **Lockout and rate limits:**
-  - Lockout after 5 failures for 15 minutes.
-  - Per-IP rate limit.
-- `cli.py create-admin` makes the first A-L1 user (password typed, never on the command line).
-
-**Tests:** happy path, wrong password, lockout, refresh rotation, reuse detection, logout, expired token, timing (unknown user takes as long as known).
+  - argon2id (64 MiB, 3 passes), re-hashed at login when the parameters change.
+  - Policy per NIST 800-63B: 12–128 characters, no well-known passwords, no repeated characters or simple sequences (including 1234567890123…), no username.
+- **Tokens:**
+  - Opaque, with `tp_at_` (access, 15 min) and `tp_rt_` (refresh, 30 days) prefixes, stored as SHA-256 only.
+  - Refresh rotates the token atomically. A spent refresh token presented again revokes the whole session family (`reuse_detected`).
+- **Lockout:**
+  - 5 wrong passwords lock the account for 15 min; the database itself decides, so simultaneous guesses can't slip under the limit.
+  - 20 failures per client address per 15 min gives a 429.
+  - Unknown users, wrong passwords and locked accounts get the same answer at the same cost (no username probing).
+- **Endpoints:** `POST /v1/auth/login`, `/v1/auth/refresh`, `/v1/auth/logout` (`?everywhere=true`), `GET /v1/me`, `POST /v1/me/password`. Changing the password needs the current one and signs out every other session.
+- **CLI:**
+  - `create-admin` asks for the password twice and never takes it as an argument.
+  - `disable-user` / `enable-user` cut a person off immediately.
+- **Separation:** device tokens and user tokens can't be swapped.
+- **Shared pieces:** sortable UUIDv7 ids (`core/ids.py`) and a reusable failure limiter (`core/ratelimit.py`).
+- **Tests:** 97 (46 new).
 
 **Commands**
 
 ```bash
-git switch main && git pull --ff-only && git switch -c day-03-auth
-cd backend && .venv/bin/alembic revision --autogenerate -m "0003 users and sessions" \
-  && .venv/bin/alembic upgrade head && .venv/bin/pytest -q tests/api/test_auth.py && cd ..
-backend/.venv/bin/python -m app.cli create-admin --tenant default --username admin
+cd ~/Developer/work/trust_punch/backend
+.venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras --output-file=requirements.txt requirements.in
+.venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras --output-file=requirements-dev.txt requirements-dev.in
+.venv/bin/pip-sync requirements-dev.txt
+.venv/bin/ruff check --fix . && .venv/bin/ruff format .
+.venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/mypy
+.venv/bin/pytest -q                                            # 97 passed
+cp data/trustpunch.db data/trustpunch.db.bak-day03 2>/dev/null || true
+.venv/bin/python -m app.cli migrate && .venv/bin/alembic current   # 0003 (head)
+.venv/bin/python -m app.cli create-admin --username admin --display-name "Site Admin"
+.venv/bin/python scripts/export_openapi.py > ../docs/openapi.json
+cd ..
 ```
 
-**Conclusion:** people can sign in. Sessions rotate and can be revoked; brute force is slowed and locked out.
+Try it against your running server (`scripts/run-dev.sh` in another terminal):
 
 ```bash
-git add backend/app/core/security.py backend/app/modules/auth backend/app/modules/users \
-        backend/app/cli.py backend/migrations/versions backend/tests docs/openapi.json
-git commit -m "feat(auth): argon2id login, rotating refresh tokens with reuse detection, lockout"
-git push -u origin day-03-auth && gh pr create --fill --base main && gh pr checks --watch && gh pr merge --squash --delete-branch
+B=https://$(ipconfig getifaddr en0):8443; CA=backend/certs/dev-ca.pem
+read -rs -p "admin password: " PW; echo
+# printf is a shell builtin: the password never appears in the process list
+printf '{"username":"admin","password":"%s"}' "$PW" \
+  | curl -s --cacert $CA $B/v1/auth/login -H 'content-type: application/json' --data @- \
+  | python3 -m json.tool | head -5
+unset PW
+```
+
+**Conclusion:**
+- People can sign in.
+- Sessions are short, rotate, and can be revoked everywhere.
+- Copied refresh tokens are detected.
+- Guessing is slowed and locked out.
+- Passwords and tokens are never stored in a usable form.
+
+```bash
+git add backend/app backend/migrations backend/tests backend/requirements.in backend/requirements.txt \
+        backend/requirements-dev.txt backend/README.md docs/openapi.json docs/CONNECTED_PLATFORM_PLAN.md
+git status --short                                             # nothing from data/ or certs/
+gitleaks git --pre-commit --staged -v
+git commit -m "feat(auth): accounts with argon2id, rotating refresh tokens with reuse detection, lockout, password change"
+git push -u origin day-03-auth
+gh pr create --fill --base main
+gh pr checks --watch
+gh pr merge --squash --delete-branch
+git switch main && git pull --ff-only
 ```
 
 ### Day 4 — RBAC engine and the permission matrix as code

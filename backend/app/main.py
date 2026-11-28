@@ -18,9 +18,10 @@ from fastapi import FastAPI
 
 from app.core import errors, http
 from app.core.config import VERSION, get_settings
-from app.core.db import migrate
+from app.core.db import dispose_engines, migrate
 from app.core.logging import configure_logging
 from app.modules.attendance.router import router as attendance_router
+from app.modules.auth.router import router as auth_router
 from app.modules.devices.router import router as devices_router
 from app.modules.health.router import router as health_router
 
@@ -33,6 +34,7 @@ _LEGACY_ROUTERS = (devices_router, attendance_router)
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     migrate()
     yield
+    dispose_engines()
 
 
 def create_app() -> FastAPI:
@@ -52,6 +54,7 @@ def create_app() -> FastAPI:
     http.install(app)
 
     app.include_router(health_router)
+    app.include_router(auth_router, prefix=V1)
     for router in _LEGACY_ROUTERS:
         app.include_router(router, prefix=V1)
         app.include_router(router, include_in_schema=False)

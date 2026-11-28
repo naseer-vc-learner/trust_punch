@@ -17,6 +17,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 VERSION = "0.3.0"
 SERVICE = "trustpunch-api"
 
+# The one company until multi-tenant sign-up exists (made by migration 0002).
+DEFAULT_TENANT_ID = "00000000-0000-7000-8000-000000000001"
+
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 _DEFAULT_DB = BACKEND_DIR / "data" / "trustpunch.db"
 
