@@ -80,10 +80,37 @@ the phone cannot reach the Mac.
 .venv/bin/python -m app.cli unblock <device-id>
 .venv/bin/python -m app.cli report --day 2026-11-27
 .venv/bin/python -m app.cli migrate            # bring the database up to date
+.venv/bin/python -m app.cli create-admin --username admin --display-name "Site Admin"
+.venv/bin/python -m app.cli disable-user <username>   # cut someone off at once
+.venv/bin/python -m app.cli enable-user <username>
 ```
 
 The report lists each punch with the server's findings. Every command (and
-the server at start-up) first brings the database up to date.
+the server at start-up) first brings the database up to date. Passwords are
+always typed at a prompt, never passed as arguments.
+
+## Signing in (people)
+
+| Endpoint | What it does |
+|---|---|
+| `POST /v1/auth/login` | `{"username", "password"}` → access token (15 min) + refresh token (30 days) |
+| `POST /v1/auth/refresh` | `{"refreshToken"}` → a new pair; the old refresh token is spent |
+| `POST /v1/auth/logout` | ends this session; `?everywhere=true` ends all of them |
+| `GET /v1/me` | who is signed in |
+| `POST /v1/me/password` | needs the current password; signs out every other session |
+
+Send the access token as `Authorization: Bearer tp_at_…`. Device tokens
+(from pairing) and user tokens are separate and can't be swapped.
+
+- Passwords: argon2id; 12–128 characters, no well-known passwords,
+  sequences or the username.
+- 5 wrong passwords lock an account for 15 minutes; 20 failures from one
+  address in 15 minutes answer 429. Unknown users, wrong passwords and
+  locked accounts all answer the same way, at the same speed.
+- A refresh token used twice means a copy exists: every session in its
+  family is ended.
+- Only SHA-256 hashes of tokens are stored. Roles and permissions arrive on
+  Day 4; until then a signed-in user can only see and manage themselves.
 
 ## How the code is laid out
 

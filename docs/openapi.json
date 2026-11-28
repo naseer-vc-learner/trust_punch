@@ -60,6 +60,101 @@
         "title": "Health",
         "type": "object"
       },
+      "LoginRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "password": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Password",
+            "type": "string"
+          },
+          "tenantId": {
+            "default": "00000000-0000-7000-8000-000000000001",
+            "maxLength": 36,
+            "minLength": 36,
+            "title": "Tenantid",
+            "type": "string"
+          },
+          "username": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "LoginRequest",
+        "type": "object"
+      },
+      "LoginResponse": {
+        "properties": {
+          "accessExpiresAt": {
+            "title": "Accessexpiresat",
+            "type": "string"
+          },
+          "accessToken": {
+            "title": "Accesstoken",
+            "type": "string"
+          },
+          "refreshExpiresAt": {
+            "title": "Refreshexpiresat",
+            "type": "string"
+          },
+          "refreshToken": {
+            "title": "Refreshtoken",
+            "type": "string"
+          },
+          "tokenType": {
+            "default": "Bearer",
+            "title": "Tokentype",
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/Me"
+          }
+        },
+        "required": [
+          "accessToken",
+          "accessExpiresAt",
+          "refreshToken",
+          "refreshExpiresAt",
+          "user"
+        ],
+        "title": "LoginResponse",
+        "type": "object"
+      },
+      "Me": {
+        "properties": {
+          "displayName": {
+            "title": "Displayname",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "tenantId": {
+            "title": "Tenantid",
+            "type": "string"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tenantId",
+          "username",
+          "displayName"
+        ],
+        "title": "Me",
+        "type": "object"
+      },
       "Meta": {
         "properties": {
           "apiVersions": {
@@ -157,6 +252,29 @@
           "token"
         ],
         "title": "PairResponse",
+        "type": "object"
+      },
+      "PasswordChange": {
+        "additionalProperties": false,
+        "properties": {
+          "currentPassword": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Currentpassword",
+            "type": "string"
+          },
+          "newPassword": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Newpassword",
+            "type": "string"
+          }
+        },
+        "required": [
+          "currentPassword",
+          "newPassword"
+        ],
+        "title": "PasswordChange",
         "type": "object"
       },
       "PunchBatch": {
@@ -372,6 +490,22 @@
         "title": "Ready",
         "type": "object"
       },
+      "RefreshRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "refreshToken": {
+            "maxLength": 200,
+            "minLength": 10,
+            "title": "Refreshtoken",
+            "type": "string"
+          }
+        },
+        "required": [
+          "refreshToken"
+        ],
+        "title": "RefreshRequest",
+        "type": "object"
+      },
       "Rejected": {
         "properties": {
           "id": {
@@ -388,6 +522,39 @@
           "reason"
         ],
         "title": "Rejected",
+        "type": "object"
+      },
+      "TokenPair": {
+        "properties": {
+          "accessExpiresAt": {
+            "title": "Accessexpiresat",
+            "type": "string"
+          },
+          "accessToken": {
+            "title": "Accesstoken",
+            "type": "string"
+          },
+          "refreshExpiresAt": {
+            "title": "Refreshexpiresat",
+            "type": "string"
+          },
+          "refreshToken": {
+            "title": "Refreshtoken",
+            "type": "string"
+          },
+          "tokenType": {
+            "default": "Bearer",
+            "title": "Tokentype",
+            "type": "string"
+          }
+        },
+        "required": [
+          "accessToken",
+          "accessExpiresAt",
+          "refreshToken",
+          "refreshExpiresAt"
+        ],
+        "title": "TokenPair",
         "type": "object"
       },
       "UploadResult": {
@@ -505,6 +672,140 @@
         "summary": "Health",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/v1/auth/login": {
+      "post": {
+        "operationId": "login_v1_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/logout": {
+      "post": {
+        "operationId": "logout_v1_auth_logout_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "everywhere",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Everywhere",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Logout",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/refresh": {
+      "post": {
+        "operationId": "refresh_v1_auth_refresh_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPair"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh",
+        "tags": [
+          "auth"
         ]
       }
     },
@@ -628,6 +929,107 @@
         "summary": "Ready",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "operationId": "me_v1_me_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Me",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/me/password": {
+      "post": {
+        "operationId": "change_password_v1_me_password_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Change Password",
+        "tags": [
+          "auth"
         ]
       }
     },
