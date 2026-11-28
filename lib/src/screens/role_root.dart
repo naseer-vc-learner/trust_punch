@@ -24,12 +24,16 @@ class RoleRoot extends StatefulWidget {
     required this.lock,
     required this.recognizer,
     required this.speech,
+    this.pickerFooter,
   });
 
   final AttendanceStore store;
   final SupervisorLock lock;
   final FaceRecognizer recognizer;
   final SpeechService speech;
+
+  /// Under the role picker; only the connected app passes one.
+  final Widget? pickerFooter;
 
   @override
   State<RoleRoot> createState() => _RoleRootState();
@@ -102,6 +106,7 @@ class _RoleRootState extends State<RoleRoot> {
             store: widget.store,
             speech: widget.speech,
             onPick: _enter,
+            footer: widget.pickerFooter,
           ),
         AppRole.worker => WorkerHome(
             store: widget.store,
@@ -133,11 +138,13 @@ class _RolePicker extends StatelessWidget {
     required this.store,
     required this.speech,
     required this.onPick,
+    this.footer,
   });
 
   final AttendanceStore store;
   final SpeechService speech;
   final ValueChanged<AppRole> onPick;
+  final Widget? footer;
 
   @override
   Widget build(BuildContext context) {
@@ -182,6 +189,7 @@ class _RolePicker extends StatelessWidget {
               trailing: Icons.lock_outline,
               onTap: () => onPick(AppRole.supervisor),
             ),
+            ?footer,
           ],
         ),
       ),

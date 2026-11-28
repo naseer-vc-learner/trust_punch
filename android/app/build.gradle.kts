@@ -29,6 +29,27 @@ android {
         versionName = flutter.versionName
     }
 
+    // Two apps from one codebase, installable side by side:
+    //   demo      — the offline demo, unchanged (same id, name and data);
+    //   connected — its own id and data; the only one that talks to the
+    //               local server (run with -t lib/main_connected.dart).
+    flavorDimensions += "edition"
+    productFlavors {
+        create("demo") {
+            dimension = "edition"
+            resValue("string", "app_name", "Trust Punch")
+        }
+        create("connected") {
+            dimension = "edition"
+            applicationIdSuffix = ".connected"
+            resValue("string", "app_name", "TrustPunch Connected")
+        }
+    }
+
+    buildFeatures {
+        resValues = true
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.

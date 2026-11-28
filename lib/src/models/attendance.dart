@@ -1,10 +1,27 @@
 import 'dart:math' as math;
 
+final _random = math.Random.secure();
+
+/// A random (version 4) UUID: a punch's id, made on the phone, so the same
+/// punch sent twice is recognised as one.
+String newPunchId() {
+  final b = List<int>.generate(16, (_) => _random.nextInt(256));
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  final h = [for (final x in b) x.toRadixString(16).padLeft(2, '0')].join();
+  return '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}-'
+      '${h.substring(16, 20)}-${h.substring(20)}';
+}
+
 /// A day is a sequence of these, per worker: in → (break out/in)* → out.
 enum PunchType { checkIn, breakStart, breakEnd, checkOut }
 
 /// Where a worker stands right now. Decides which punches are legal next.
 enum WorkerStatus { off, working, onBreak }
+
+/// How a punch was made: on the worker's own phone (1:1) or at a gate phone
+/// (1:N). A session started one way is finished the same way.
+enum PunchVia { ownPhone, gate }
 
 /// A worker's place on one project: their role there and their job
 /// (activity).
@@ -268,7 +285,42 @@ class Punch {
     this.photo,
     this.corrected = false,
     this.clockSuspect = false,
+    this.id,
+    this.replaces,
+    this.via,
   });
+
+  /// How the worker made it; null for automatic and corrected punches (the
+  /// app or a supervisor made those) and for punches from older versions.
+  final PunchVia? via;
+
+  /// Permanent id ([newPunchId]); the store gives one to every punch it
+  /// saves. Null only on a punch not saved yet.
+  final String? id;
+
+  /// For a corrected punch: the id of the punch it replaced, if any.
+  final String? replaces;
+
+  /// This punch with [id] (and [replaces]) set.
+  Punch withId(String id, {String? replaces}) => Punch(
+        type: type,
+        at: at,
+        workerId: workerId,
+        employeeId: employeeId,
+        workerName: workerName,
+        siteId: siteId,
+        siteName: siteName,
+        latitude: latitude,
+        longitude: longitude,
+        distanceMeters: distanceMeters,
+        auto: auto,
+        photo: photo,
+        corrected: corrected,
+        clockSuspect: clockSuspect,
+        id: id,
+        replaces: replaces ?? this.replaces,
+        via: via,
+      );
 
   /// Added by a supervisor-approved correction, not punched live.
   final bool corrected;
@@ -311,6 +363,9 @@ class Punch {
         if (photo != null) 'photo': photo,
         if (corrected) 'corrected': true,
         if (clockSuspect) 'clockSuspect': true,
+        if (id != null) 'id': id,
+        if (replaces != null) 'replaces': replaces,
+        if (via != null) 'via': via!.name,
       };
 
   factory Punch.fromJson(Map<String, dynamic> json) => Punch(
@@ -328,6 +383,13 @@ class Punch {
         photo: json['photo'] as String?,
         corrected: json['corrected'] as bool? ?? false,
         clockSuspect: json['clockSuspect'] as bool? ?? false,
+        id: json['id'] as String?,
+        replaces: json['replaces'] as String?,
+        via: switch (json['via']) {
+          'ownPhone' => PunchVia.ownPhone,
+          'gate' => PunchVia.gate,
+          _ => null,
+        },
       );
 }
 

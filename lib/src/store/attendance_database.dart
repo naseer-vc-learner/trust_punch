@@ -33,8 +33,9 @@ class AttendanceDatabase {
     _migrate();
     _insertPunch = _db.prepare(
       'INSERT INTO punches (worker_id, at, day, type, employee_id, '
-      'worker_name, site_id, site_name, lat, lng, distance, flags, photo) '
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'worker_name, site_id, site_name, lat, lng, distance, flags, photo, '
+      'uid, replaces, via) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       persistent: true,
     );
     _upsertRecord = _db.prepare(
@@ -72,10 +73,39 @@ class AttendanceDatabase {
   late final PreparedStatement _insertPunch;
   late final PreparedStatement _upsertRecord;
 
-  static const schemaVersion = 1;
+  /// 1: punches and records. 2: each punch gets its permanent id, the id
+  /// of the punch a correction replaced, and whether it has been sent to a
+  /// server (only the connected app sends; the demo never reads it).
+  /// 3: how each punch was made (own phone or gate phone).
+  static const schemaVersion = 3;
 
   void _migrate() {
-    if (_db.userVersion >= schemaVersion) return;
+    final from = _db.userVersion;
+    if (from >= schemaVersion) return;
+    transaction(() {
+      if (from < 1) _createV1();
+      if (from < 2) _upgradeToV2();
+      if (from < 3) _db.execute('ALTER TABLE punches ADD COLUMN via TEXT');
+      _db.userVersion = schemaVersion;
+    });
+  }
+
+  void _upgradeToV2() {
+    _db.execute('ALTER TABLE punches ADD COLUMN uid TEXT');
+    _db.execute('ALTER TABLE punches ADD COLUMN replaces TEXT');
+    _db.execute(
+        'ALTER TABLE punches ADD COLUMN synced INTEGER NOT NULL DEFAULT 0');
+    final give = _db.prepare('UPDATE punches SET uid = ? WHERE id = ?');
+    for (final row in _db.select('SELECT id FROM punches')) {
+      give.execute([newPunchId(), row.columnAt(0)]);
+    }
+    give.close();
+    _db.execute('CREATE UNIQUE INDEX punches_uid ON punches (uid)');
+    _db.execute(
+        'CREATE INDEX punches_unsynced ON punches (synced) WHERE synced = 0');
+  }
+
+  void _createV1() {
     _db.execute('''
       CREATE TABLE IF NOT EXISTS punches (
         id INTEGER PRIMARY KEY,
@@ -106,7 +136,6 @@ class AttendanceDatabase {
         value TEXT NOT NULL
       );
     ''');
-    _db.userVersion = schemaVersion;
   }
 
   // ------------------------------------------------------------ transactions
@@ -183,7 +212,7 @@ class AttendanceDatabase {
   static const _auto = 1, _corrected = 2, _clockSuspect = 4;
 
   static const _columns = 'worker_id, at, type, employee_id, worker_name, '
-      'site_id, site_name, lat, lng, distance, flags, photo';
+      'site_id, site_name, lat, lng, distance, flags, photo, uid, replaces, via';
 
   void insertPunch(Punch p) => _insertPunch.execute([
         p.workerId,
@@ -201,14 +230,49 @@ class AttendanceDatabase {
             (p.corrected ? _corrected : 0) |
             (p.clockSuspect ? _clockSuspect : 0),
         p.photo,
+        p.id ?? newPunchId(),
+        p.replaces,
+        p.via?.name,
       ]);
 
-  /// Removes one punch. A worker never has two punches of one type in the
-  /// same microsecond, so this identifies it exactly.
-  void deletePunch(Punch p) => _db.execute(
-        'DELETE FROM punches WHERE worker_id = ? AND at = ? AND type = ?',
-        [p.workerId, p.at.microsecondsSinceEpoch, p.type.name],
+  /// Removes one punch, by its id (or, for one without, by worker, time and
+  /// type: a worker never has two of one type in the same microsecond).
+  void deletePunch(Punch p) => p.id != null
+      ? _db.execute('DELETE FROM punches WHERE uid = ?', [p.id])
+      : _db.execute(
+          'DELETE FROM punches WHERE worker_id = ? AND at = ? AND type = ?',
+          [p.workerId, p.at.microsecondsSinceEpoch, p.type.name],
+        );
+
+  // ---------------------------------------------------------------- outbox
+
+  /// Upload states in `punches.synced`.
+  static const pending = 0, uploaded = 1, refused = 2, keptOnPhone = 3;
+
+  /// Punches not yet sent, oldest saved first.
+  List<Punch> punchesToSend(int limit) => _read(
+        'SELECT $_columns FROM punches WHERE synced = $pending '
+        'ORDER BY id LIMIT ?',
+        [limit],
       );
+
+  int get punchesToSendCount => _db
+      .select('SELECT count(*) FROM punches WHERE synced = $pending')
+      .first
+      .columnAt(0) as int;
+
+  int countInState(int state) => _db
+      .select('SELECT count(*) FROM punches WHERE synced = ?', [state])
+      .first
+      .columnAt(0) as int;
+
+  void markSent(Iterable<String> ids, int state) => transaction(() {
+        final mark = _db.prepare('UPDATE punches SET synced = ? WHERE uid = ?');
+        for (final id in ids) {
+          mark.execute([state, id]);
+        }
+        mark.close();
+      });
 
   void deletePunchesOf(String workerId) =>
       _db.execute('DELETE FROM punches WHERE worker_id = ?', [workerId]);
@@ -262,6 +326,13 @@ class AttendanceDatabase {
           corrected: (r.columnAt(10) as int) & _corrected != 0,
           clockSuspect: (r.columnAt(10) as int) & _clockSuspect != 0,
           photo: r.columnAt(11) as String?,
+          id: r.columnAt(12) as String?,
+          replaces: r.columnAt(13) as String?,
+          via: switch (r.columnAt(14)) {
+            'ownPhone' => PunchVia.ownPhone,
+            'gate' => PunchVia.gate,
+            _ => null,
+          },
         ),
     ];
   }

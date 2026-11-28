@@ -1,0 +1,184 @@
+# Build and test on every push and pull request.
+# Every action is pinned to a full commit SHA (the tag is in the comment), so a
+# moved or hijacked tag cannot change what runs. Dependabot keeps them current.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep in step with the Flutter the team builds with (see docs plan, Day 1).
+  FLUTTER_VERSION: "3.44.2"
+  PYTHON_VERSION: "3.14"
+
+jobs:
+  demo-isolation:
+    name: Demo app stays offline
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: bash tool/check_demo_isolation.sh
+
+  flutter:
+    name: Flutter analyze + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: dart analyze lib
+      - run: flutter test
+
+  backend:
+    name: Backend lint + test + audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      # Lock files carry a SHA-256 for every package: a changed or tampered
+      # download is refused.
+      - run: pip install --require-hashes -r requirements-dev.txt
+      - name: Lock files match their .in sources
+        run: |
+          pip install pip-tools==7.7.0
+          # Compile into a copy of the lock: pip-compile keeps the pinned
+          # versions, so this fails only when requirements.in and the lock
+          # disagree, not when upstream publishes a release.
+          for pair in "requirements.in requirements.txt" "requirements-dev.in requirements-dev.txt"; do
+            set -- $pair
+            cp "$2" "$RUNNER_TEMP/check.txt"
+            pip-compile --quiet --generate-hashes --allow-unsafe --strip-extras \
+              --output-file="$RUNNER_TEMP/check.txt" "$1"
+            diff <(grep -v '^#' "$2") <(grep -v '^#' "$RUNNER_TEMP/check.txt") \
+              || { echo "$2 is out of date with $1: run pip-compile (see the header of $1)"; exit 1; }
+          done
+      - name: Tests
+        run: pytest -q
+      - name: Static security analysis (Bandit, medium+ severity)
+        run: |
+          pip install bandit==1.9.4
+          bandit -r app -ll
+      - name: Known-vulnerable dependencies (pip-audit)
+        run: |
+          pip install pip-audit==2.10.1
+          pip-audit -r requirements.txt --strict
+
+  e2e:
+    name: Phone code against a real server
+    needs: [flutter, backend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Start the server (loopback HTTP; the app allows plain HTTP only to loopback)
+        working-directory: backend
+        env:
+          TRUSTPUNCH_DB: ${{ runner.temp }}/tp-e2e.db
+        run: |
+          pip install --require-hashes -r requirements.txt
+          nohup uvicorn app.main:app --host 127.0.0.1 --port 8765 > "$RUNNER_TEMP/server.log" 2>&1 &
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8765/health && break; sleep 1; done
+          CODE=$(python -m app.cli pair-code | grep -o '[0-9]\{6\}' | head -1)
+          echo "::add-mask::$CODE"
+          echo "PAIR_CODE=$CODE" >> "$GITHUB_ENV"
+      - run: flutter pub get
+      - name: End-to-end test
+        env:
+          TRUSTPUNCH_TEST_SERVER: http://127.0.0.1:8765
+          TRUSTPUNCH_PAIR_CODE: ${{ env.PAIR_CODE }}
+        run: flutter test test/real_server_test.dart
+      - name: Server log on failure
+        if: failure()
+        run: cat "$RUNNER_TEMP/server.log"
+
+  android:
+    name: Android builds (demo + connected)
+    if: github.event_name != 'pull_request'
+    needs: [demo-isolation, flutter]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      # Release mode is still signed with the debug key (see android/app/build.gradle.kts)
+      # until Day 25 adds a real keystore from repository secrets.
+      - name: Demo APK (offline app, unchanged)
+        run: flutter build apk --release --flavor demo -t lib/main.dart --obfuscate --split-debug-info=build/symbols/demo
+      - name: Connected APK
+        run: >
+          flutter build apk --release --flavor connected -t lib/main_connected.dart
+          --obfuscate --split-debug-info=build/symbols/connected
+          --dart-define=API_BASE_URL=https://trustpunch.invalid:8443
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: apks
+          path: build/app/outputs/flutter-apk/*.apk
+          retention-days: 7
