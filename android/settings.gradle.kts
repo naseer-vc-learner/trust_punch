@@ -21,9 +21,6 @@ plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
     id("com.android.application") version "9.0.1" apply false
     id("org.jetbrains.kotlin.android") version "2.3.20" apply false
-    // Reads android/app/google-services.json and generates the string
-    // resources the native Firebase SDKs auto-initialise from. Without it
-  
 }
 
 include(":app")
