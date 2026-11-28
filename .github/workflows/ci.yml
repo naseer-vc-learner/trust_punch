@@ -91,6 +91,17 @@ jobs:
             diff <(grep -v '^#' "$2") <(grep -v '^#' "$RUNNER_TEMP/check.txt") \
               || { echo "$2 is out of date with $1: run pip-compile (see the header of $1)"; exit 1; }
           done
+      - name: Lint and format (ruff, includes Bandit's security rules)
+        run: |
+          ruff check --output-format=github .
+          ruff format --check .
+      - name: Type check (mypy)
+        run: mypy
+      - name: API description matches docs/openapi.json
+        run: |
+          python scripts/export_openapi.py > "$RUNNER_TEMP/openapi.json"
+          diff -u ../docs/openapi.json "$RUNNER_TEMP/openapi.json" \
+            || { echo "The API changed: run 'python scripts/export_openapi.py > ../docs/openapi.json' and commit it"; exit 1; }
       - name: Tests
         run: pytest -q
       - name: Static security analysis (Bandit, medium+ severity)
@@ -130,7 +141,7 @@ jobs:
           TRUSTPUNCH_DB: ${{ runner.temp }}/tp-e2e.db
         run: |
           pip install --require-hashes -r requirements.txt
-          nohup uvicorn app.main:app --host 127.0.0.1 --port 8765 > "$RUNNER_TEMP/server.log" 2>&1 &
+          nohup uvicorn app.main:app --host 127.0.0.1 --port 8765 --no-access-log > "$RUNNER_TEMP/server.log" 2>&1 &
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8765/health && break; sleep 1; done
           CODE=$(python -m app.cli pair-code | grep -o '[0-9]\{6\}' | head -1)
           echo "::add-mask::$CODE"
