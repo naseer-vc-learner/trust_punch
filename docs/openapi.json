@@ -1,0 +1,787 @@
+{
+  "components": {
+    "schemas": {
+      "DeviceResponse": {
+        "properties": {
+          "deviceId": {
+            "title": "Deviceid",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId",
+          "name"
+        ],
+        "title": "DeviceResponse",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "Health": {
+        "properties": {
+          "serverTime": {
+            "title": "Servertime",
+            "type": "string"
+          },
+          "service": {
+            "title": "Service",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "service",
+          "version",
+          "serverTime"
+        ],
+        "title": "Health",
+        "type": "object"
+      },
+      "Meta": {
+        "properties": {
+          "apiVersions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Apiversions",
+            "type": "array"
+          },
+          "minAppVersion": {
+            "title": "Minappversion",
+            "type": "string"
+          },
+          "service": {
+            "title": "Service",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "service",
+          "version",
+          "apiVersions",
+          "minAppVersion"
+        ],
+        "title": "Meta",
+        "type": "object"
+      },
+      "OpenSession": {
+        "properties": {
+          "onThisPhone": {
+            "title": "Onthisphone",
+            "type": "boolean"
+          },
+          "open": {
+            "title": "Open",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "open",
+          "onThisPhone"
+        ],
+        "title": "OpenSession",
+        "type": "object"
+      },
+      "PairRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "pattern": "^\\d{6}$",
+            "title": "Code",
+            "type": "string"
+          },
+          "deviceName": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Devicename",
+            "type": "string"
+          },
+          "platform": {
+            "enum": [
+              "ios",
+              "android",
+              "other"
+            ],
+            "title": "Platform",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "deviceName",
+          "platform"
+        ],
+        "title": "PairRequest",
+        "type": "object"
+      },
+      "PairResponse": {
+        "properties": {
+          "deviceId": {
+            "title": "Deviceid",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId",
+          "token"
+        ],
+        "title": "PairResponse",
+        "type": "object"
+      },
+      "PunchBatch": {
+        "additionalProperties": false,
+        "properties": {
+          "punches": {
+            "items": {
+              "$ref": "#/components/schemas/PunchIn"
+            },
+            "maxItems": 500,
+            "title": "Punches",
+            "type": "array"
+          },
+          "sentAt": {
+            "format": "date-time",
+            "title": "Sentat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sentAt",
+          "punches"
+        ],
+        "title": "PunchBatch",
+        "type": "object"
+      },
+      "PunchIn": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "auto": {
+            "default": false,
+            "title": "Auto",
+            "type": "boolean"
+          },
+          "clockSuspect": {
+            "default": false,
+            "title": "Clocksuspect",
+            "type": "boolean"
+          },
+          "corrected": {
+            "default": false,
+            "title": "Corrected",
+            "type": "boolean"
+          },
+          "distance": {
+            "maximum": 20000000.0,
+            "minimum": 0.0,
+            "title": "Distance",
+            "type": "number"
+          },
+          "employeeId": {
+            "maxLength": 100,
+            "title": "Employeeid",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "lat": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Lat",
+            "type": "number"
+          },
+          "lng": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Lng",
+            "type": "number"
+          },
+          "offsetMinutes": {
+            "maximum": 840.0,
+            "minimum": -840.0,
+            "title": "Offsetminutes",
+            "type": "integer"
+          },
+          "replaces": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaces"
+          },
+          "siteId": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Siteid",
+            "type": "string"
+          },
+          "siteLat": {
+            "anyOf": [
+              {
+                "maximum": 90.0,
+                "minimum": -90.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sitelat"
+          },
+          "siteLng": {
+            "anyOf": [
+              {
+                "maximum": 180.0,
+                "minimum": -180.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sitelng"
+          },
+          "siteName": {
+            "maxLength": 200,
+            "title": "Sitename",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "checkIn",
+              "breakStart",
+              "breakEnd",
+              "checkOut"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "via": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ownPhone",
+                  "gate"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Via"
+          },
+          "workerId": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Workerid",
+            "type": "string"
+          },
+          "workerName": {
+            "maxLength": 200,
+            "title": "Workername",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "at",
+          "offsetMinutes",
+          "workerId",
+          "employeeId",
+          "workerName",
+          "siteId",
+          "siteName",
+          "lat",
+          "lng",
+          "distance"
+        ],
+        "title": "PunchIn",
+        "type": "object"
+      },
+      "Ready": {
+        "properties": {
+          "database": {
+            "title": "Database",
+            "type": "string"
+          },
+          "migrations": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Migrations"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ready",
+          "database"
+        ],
+        "title": "Ready",
+        "type": "object"
+      },
+      "Rejected": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "reason"
+        ],
+        "title": "Rejected",
+        "type": "object"
+      },
+      "UploadResult": {
+        "properties": {
+          "accepted": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Accepted",
+            "type": "array"
+          },
+          "duplicates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Duplicates",
+            "type": "array"
+          },
+          "flags": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Flags",
+            "type": "object"
+          },
+          "rejected": {
+            "items": {
+              "$ref": "#/components/schemas/Rejected"
+            },
+            "title": "Rejected",
+            "type": "array"
+          },
+          "serverTime": {
+            "title": "Servertime",
+            "type": "string"
+          }
+        },
+        "required": [
+          "accepted",
+          "duplicates",
+          "rejected",
+          "flags",
+          "serverTime"
+        ],
+        "title": "UploadResult",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "TrustPunch API",
+    "version": "0.3.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "description": "Says the server is up, and what time it thinks it is.\n\nThe phone compares serverTime with its own clock; a large gap is the\nfirst sign of a tampered clock.",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/v1/devices/me": {
+      "get": {
+        "operationId": "me_v1_devices_me_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Me",
+        "tags": [
+          "devices"
+        ]
+      }
+    },
+    "/v1/devices/pair": {
+      "post": {
+        "description": "Trades a one-time code from the server's operator for a device token.",
+        "operationId": "pair_v1_devices_pair_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pair",
+        "tags": [
+          "devices"
+        ]
+      }
+    },
+    "/v1/health/ready": {
+      "get": {
+        "description": "200 only when the database answers and is at the newest migration.",
+        "operationId": "ready_v1_health_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ready"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ready"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Ready",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/v1/meta/version": {
+      "get": {
+        "operationId": "meta_v1_meta_version_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Meta"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Meta",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/v1/punches/batch": {
+      "post": {
+        "description": "Stores each punch once and returns what happened to each.",
+        "operationId": "upload_punches_v1_punches_batch_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PunchBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload Punches",
+        "tags": [
+          "attendance"
+        ]
+      }
+    },
+    "/v1/workers/{worker_id}/open-session": {
+      "get": {
+        "description": "Whether the worker is checked in right now, and on which phone.",
+        "operationId": "open_session_v1_workers__worker_id__open_session_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "worker_id",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Worker Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "day",
+            "required": true,
+            "schema": {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "title": "Day",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenSession"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Open Session",
+        "tags": [
+          "attendance"
+        ]
+      }
+    }
+  }
+}

@@ -1035,58 +1035,66 @@ git switch main && git pull --ff-only
 
 ### Day 2 — Server skeleton: config, layers, migrations, `/v1`
 
-**Build**
-- New dependencies, added to `requirements.in` / `requirements-dev.in`, then locked with hashes by `pip-compile` (see `backend/README.md`, "Dependencies"):
-  - Runtime: `sqlalchemy==2.1.9`, `alembic==1.20.1`, `pydantic-settings==2.16.3`, `structlog==26.1.0`, `argon2-cffi==25.1.0`, `pyotp==2.12.2`, `psycopg[binary]==3.3.9`, `openpyxl==3.1.5`.
-  - Dev: `ruff==0.17.6`, `mypy==2.4.1`.
-- Create the [4.3](#43-server-layout-target) layout.
-  - `core/config.py`: all `TRUSTPUNCH_*` settings in one place.
-  - `core/errors.py`: RFC 9457 errors.
-  - `core/logging.py`: JSON logs with a request id and no personal data.
-- **Alembic migrations:**
-  - Migration `0001` = today's tables exactly. On your existing database, run `alembic stamp 0001`, so nothing is lost.
-  - Migration `0002` adds `tenant_id`, `created_at`, `updated_at` and `version`, plus a default tenant.
-- Mount every existing route also under `/v1`. The old paths stay until Day 11, because today's app uses them.
-- Add `GET /v1/health/ready` and `GET /v1/meta/version`.
-- Write `tests/unit/test_architecture.py` (layer rules) and `scripts/export-openapi.py`, which writes `docs/openapi.json`. CI compares that file.
+**Built** (written and verified; you run the commands below):
+- **Layout** ([4.3](#43-server-layout-target)):
+  - `app/core/`: settings, database and migrations, RFC 9457 errors, request ids, security headers, JSON access log.
+  - `app/modules/{health,devices,attendance}/`: router → service → repo, with `deps.py` for "who is calling".
+- **Migrations (Alembic):**
+  - `0001` recreates the Day-0 schema with "create if missing", so your existing `data/trustpunch.db` upgrades in place with no `stamp` step.
+  - `0002` adds `tenants` plus `tenant_id` on every table; existing rows go to the default tenant.
+  - The server migrates at start-up; the CLI migrates before every command.
+- **Routes:**
+  - Every route is under `/v1`.
+  - The old paths still answer for today's app, hidden from the API description, until Day 11.
+  - New: `GET /v1/health/ready` and `GET /v1/meta/version` (`TRUSTPUNCH_MIN_APP_VERSION`).
+- **Tests:** 51 in total, the 30 existing unchanged plus 21 new for `/v1`, errors, headers, request ids, migrations of an old database, and the layer rules.
+- **CI:** ruff, mypy, and an OpenAPI drift check against `docs/openapi.json`.
+- **Dependencies:**
+  - Added only what Day 2 uses: `sqlalchemy==2.1.9`, `alembic==1.20.1`, `pydantic-settings==2.16.3`; dev: `ruff==0.17.6`, `mypy==2.4.1`.
+  - The others arrive on the day they are needed: `argon2-cffi` (Day 3), `pyotp` (Day 5), `openpyxl` (Day 18), `psycopg` (Day 25).
+  - Logging uses the standard library, not structlog: one dependency less.
+- **Queries:** existing ones stay on sqlite3 for now. Each module moves to SQLAlchemy when its day rebuilds it.
 
 **Commands**
 
 ```bash
-git switch main && git pull --ff-only && git switch -c day-02-server-skeleton
+cd ~/Developer/work/trust_punch
+git switch -c day-02-server-skeleton           # the uncommitted Day-2 files come along
 cd backend
-printf '%s\n' sqlalchemy==2.1.9 alembic==1.20.1 pydantic-settings==2.16.3 structlog==26.1.0 \
-  argon2-cffi==25.1.0 pyotp==2.12.2 "psycopg[binary]==3.3.9" openpyxl==3.1.5 >> requirements.in
-printf '%s\n' ruff==0.17.6 mypy==2.4.1 >> requirements-dev.in
+cp data/trustpunch.db data/trustpunch.db.bak-day02 2>/dev/null || true   # backup first
 .venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras --output-file=requirements.txt requirements.in
 .venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras --output-file=requirements-dev.txt requirements-dev.in
 .venv/bin/pip-sync requirements-dev.txt
-.venv/bin/alembic init migrations
-# edit migrations/env.py to use app.core.db metadata + TRUSTPUNCH_DB
-.venv/bin/alembic revision -m "0001 baseline: schema as of Day 0"
-.venv/bin/alembic revision --autogenerate -m "0002 tenancy columns"
-cp data/trustpunch.db data/trustpunch.db.bak-day02      # backup before touching it
-.venv/bin/alembic stamp 0001 && .venv/bin/alembic upgrade head
-.venv/bin/ruff check . && .venv/bin/ruff format --check .
-.venv/bin/pytest -q
-TRUSTPUNCH_DEBUG=1 .venv/bin/python scripts/export-openapi.py > ../docs/openapi.json
+.venv/bin/ruff check --fix . && .venv/bin/ruff format .
+.venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/mypy
+.venv/bin/pytest -q                                            # 51 passed
+.venv/bin/python -m app.cli migrate                            # your real database: 0001 → 0002
+.venv/bin/alembic current                                      # 0002 (head)
+.venv/bin/python scripts/export_openapi.py > ../docs/openapi.json
 cd ..
 ```
 
-Add to `ci.yml` (backend job):
-- `ruff check .`
-- `ruff format --check .`
-- `mypy app`
-- An OpenAPI drift step: `python scripts/export-openapi.py | diff - ../docs/openapi.json`
-
-**Conclusion:** the server is layered with migrations, every route is under `/v1` (old paths still work), there is a readiness endpoint, and the OpenAPI copy is checked in CI. The existing app and e2e test still pass.
+**Conclusion:**
+- The server is layered with enforced boundaries.
+- Migrations own the schema, and existing data is kept.
+- Every route is under `/v1` while today's app keeps working.
+- There are readiness and version endpoints.
+- Errors are RFC 9457 with request ids.
+- Logs never hold personal data.
+- CI checks lint, types, the layer rules and API drift.
 
 ```bash
-git add backend/app backend/migrations backend/alembic.ini backend/requirements.in backend/requirements.txt \
-        backend/requirements-dev.in backend/requirements-dev.txt backend/scripts backend/tests docs/openapi.json .github/workflows/ci.yml
-git commit -m "feat(server): layered modules, Alembic migrations, /v1 routes, readiness, OpenAPI drift check"
-git push -u origin day-02-server-skeleton && gh pr create --fill --base main
-gh pr checks --watch && gh pr merge --squash --delete-branch
+git add backend/app backend/migrations backend/alembic.ini backend/pyproject.toml backend/README.md \
+        backend/requirements.in backend/requirements.txt backend/requirements-dev.in backend/requirements-dev.txt \
+        backend/scripts backend/tests docs/openapi.json docs/CONNECTED_PLATFORM_PLAN.md .github/workflows/ci.yml
+git status --short                                             # review: nothing from data/ or certs/
+gitleaks git --pre-commit --staged -v
+git commit -m "feat(server): layered modules, Alembic migrations, /v1 routes, RFC 9457 errors, readiness, API drift check"
+git push -u origin day-02-server-skeleton
+gh pr create --fill --base main
+gh pr checks --watch
+gh pr merge --squash --delete-branch
+git switch main && git pull --ff-only
 ```
 
 ### Day 3 — Users, passwords, sessions

@@ -9,3 +9,8 @@
 # `pip install --require-hashes`.
 fastapi==0.165.0
 uvicorn==0.54.0
+# Database migrations (Alembic runs on SQLAlchemy; the server moves to it module by module).
+sqlalchemy==2.1.9
+alembic==1.20.1
+# Settings from TRUSTPUNCH_* environment variables, validated.
+pydantic-settings==2.16.3

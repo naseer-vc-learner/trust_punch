@@ -1,12 +1,12 @@
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.db import connect
+from app.core.db import connect
 from app.main import app
-from app.security import new_pair_code
+from app.modules.devices.service import new_pair_code
 
 client = TestClient(app)
 
@@ -19,8 +19,7 @@ def _token(name: str = "Gate phone") -> str:
     conn = connect()
     code = new_pair_code(conn)
     conn.close()
-    r = client.post("/devices/pair",
-                    json={"code": code, "deviceName": name, "platform": "android"})
+    r = client.post("/devices/pair", json={"code": code, "deviceName": name, "platform": "android"})
     return r.json()["token"]
 
 
@@ -47,7 +46,7 @@ def _send(token: str, punches: list[dict], sent_at: datetime | None = None):
         "/punches/batch",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "sentAt": (sent_at or datetime.now(timezone.utc)).isoformat(),
+            "sentAt": (sent_at or datetime.now(UTC)).isoformat(),
             "punches": punches,
         },
     )
@@ -62,7 +61,7 @@ def _today(h: int, m: int = 0) -> datetime:
     """Yesterday (Dubai) at h:m, as UTC: one whole day, all in the past."""
     dubai = timezone(timedelta(hours=4))
     day = (datetime.now(dubai) - timedelta(days=1)).date()
-    return datetime(day.year, day.month, day.day, h, m, tzinfo=dubai).astimezone(timezone.utc)
+    return datetime(day.year, day.month, day.day, h, m, tzinfo=dubai).astimezone(UTC)
 
 
 def test_a_day_is_stored_once(token):
@@ -119,11 +118,11 @@ class TestServerChecks:
 
     def test_a_phone_clock_off_by_minutes(self, token):
         p = _punch("checkIn", _today(7))
-        r = _send(token, [p], sent_at=datetime.now(timezone.utc) - timedelta(minutes=30))
+        r = _send(token, [p], sent_at=datetime.now(UTC) - timedelta(minutes=30))
         assert "clock_skew" in r.json()["flags"][p["id"]]
 
     def test_a_punch_in_the_future(self, token):
-        p = _punch("checkIn", datetime.now(timezone.utc) + timedelta(hours=2))
+        p = _punch("checkIn", datetime.now(UTC) + timedelta(hours=2))
         assert "future_time" in _send(token, [p]).json()["flags"][p["id"]]
 
     def test_a_location_reported_somewhere_else(self, token):
@@ -142,13 +141,15 @@ def test_a_correction_replaces_the_automatic_check_out(token):
     in_ = _punch("checkIn", _today(7))
     auto_out = _punch("checkOut", _today(16), auto=True, distance=0.0)
     _send(token, [in_, auto_out])
-    fixed = _punch("checkOut", _today(15, 40), corrected=True, distance=0.0,
-                   replaces=auto_out["id"])
+    fixed = _punch(
+        "checkOut", _today(15, 40), corrected=True, distance=0.0, replaces=auto_out["id"]
+    )
     r = _send(token, [fixed]).json()
     assert fixed["id"] not in r["flags"], "the day is valid with the replacement"
     conn = connect()
-    by = conn.execute("SELECT superseded_by FROM punches WHERE id = ?",
-                      (auto_out["id"],)).fetchone()[0]
+    by = conn.execute(
+        "SELECT superseded_by FROM punches WHERE id = ?", (auto_out["id"],)
+    ).fetchone()[0]
     conn.close()
     assert by == fixed["id"]
 
@@ -185,8 +186,11 @@ class TestOnePhonePerSession:
 
     def _open(self, token: str, worker: str = "w1") -> dict:
         day = (_today(7) + timedelta(hours=4)).date().isoformat()
-        r = client.get(f"/workers/{worker}/open-session", params={"day": day},
-                       headers={"Authorization": f"Bearer {token}"})
+        r = client.get(
+            f"/workers/{worker}/open-session",
+            params={"day": day},
+            headers={"Authorization": f"Bearer {token}"},
+        )
         assert r.status_code == 200
         return r.json()
 
@@ -198,8 +202,10 @@ class TestOnePhonePerSession:
         assert self._open(own, worker="someone-else")["open"] is False
 
     def test_after_check_out_any_phone_may_start(self, token):
-        _send(token, [_punch("checkIn", _today(7), via="gate"),
-                      _punch("checkOut", _today(12), via="gate")])
+        _send(
+            token,
+            [_punch("checkIn", _today(7), via="gate"), _punch("checkOut", _today(12), via="gate")],
+        )
         assert self._open(_token("Asha's phone"))["open"] is False
 
     def test_a_session_moved_to_another_phone_is_flagged(self, token):
@@ -216,10 +222,14 @@ class TestOnePhonePerSession:
         assert fix["id"] not in r["flags"]
 
     def test_the_question_needs_a_paired_phone_and_a_real_day(self, token):
-        assert client.get("/workers/w1/open-session",
-                          params={"day": "2027-03-02"}).status_code == 401
-        r = client.get("/workers/w1/open-session", params={"day": "yesterday"},
-                       headers={"Authorization": f"Bearer {token}"})
+        assert (
+            client.get("/workers/w1/open-session", params={"day": "2027-03-02"}).status_code == 401
+        )
+        r = client.get(
+            "/workers/w1/open-session",
+            params={"day": "yesterday"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
         assert r.status_code == 422
 
     def test_via_must_be_known(self, token):

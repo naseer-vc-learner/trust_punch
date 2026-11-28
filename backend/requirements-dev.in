@@ -10,3 +10,6 @@
 pytest==9.2.0
 # Starlette's test client uses httpx2 (httpx with it is deprecated).
 httpx2==2.16.2
+# Lint + format (includes Bandit's security rules) and type checks.
+ruff==0.17.6
+mypy==2.4.1

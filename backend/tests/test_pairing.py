@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from app.db import connect
+from app.core.db import connect
 from app.main import app
 
 client = TestClient(app)
@@ -9,7 +9,7 @@ client = TestClient(app)
 def _code() -> str:
     conn = connect()
     try:
-        from app.security import new_pair_code
+        from app.modules.devices.service import new_pair_code
 
         return new_pair_code(conn)
     finally:
@@ -69,20 +69,30 @@ def test_one_address_is_slowed_down():
 
 
 def test_bad_input_is_refused():
-    assert client.post("/devices/pair", json={"code": "12ab56", "deviceName": "x",
-                                              "platform": "ios"}).status_code == 422
-    assert client.post("/devices/pair", json={"code": "123456", "deviceName": "x",
-                                              "platform": "ios",
-                                              "admin": True}).status_code == 422
+    assert (
+        client.post(
+            "/devices/pair", json={"code": "12ab56", "deviceName": "x", "platform": "ios"}
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            "/devices/pair",
+            json={"code": "123456", "deviceName": "x", "platform": "ios", "admin": True},
+        ).status_code
+        == 422
+    )
 
 
 def test_without_a_token_nothing_is_reachable():
     assert client.get("/devices/me").status_code == 401
-    assert client.get("/devices/me",
-                      headers={"Authorization": "Bearer nope"}).status_code == 401
-    assert client.post("/punches/batch",
-                       json={"sentAt": "2027-03-02T07:00:00Z",
-                             "punches": []}).status_code == 401
+    assert client.get("/devices/me", headers={"Authorization": "Bearer nope"}).status_code == 401
+    assert (
+        client.post(
+            "/punches/batch", json={"sentAt": "2027-03-02T07:00:00Z", "punches": []}
+        ).status_code
+        == 401
+    )
 
 
 def test_a_blocked_phone_is_refused():
