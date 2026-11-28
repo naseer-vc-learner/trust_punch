@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
 
+import '../demo/demo_data.dart';
 import '../i18n/ui_text.dart';
 import '../models/attendance.dart';
 import '../services/face_recognizer.dart';
 import '../services/speech_service.dart';
 import '../services/supervisor_lock.dart';
 import '../store/attendance_store.dart';
+import 'approvals_screens.dart';
 import 'calendar_screen.dart';
 import 'leave_screen.dart';
 import 'shared_widgets.dart';
-import 'sites_screen.dart';
+import 'project_screens.dart';
 import 'workers_screen.dart';
 
 /// Everything that is not punching: who is on site now, leave waiting for a
@@ -46,6 +48,7 @@ class SupervisorHome extends StatelessWidget {
       appBar: AppBar(
         title: Text(t(lang, T.roleSupervisor)),
         actions: [
+          _DemoMenu(store: store),
           IconButton(
             tooltip: t(lang, T.switchRole),
             icon: const Icon(Icons.logout),
@@ -80,6 +83,23 @@ class SupervisorHome extends StatelessWidget {
                     ),
                   ),
                   const Divider(height: 1),
+                  _ApprovalTile(
+                    icon: Icons.more_time,
+                    title: t(lang, T.overtimeApprovals),
+                    waiting: store.pendingOvertimeCount,
+                    lang: lang,
+                    onTap: () => _open(context, OvertimeScreen(store: store)),
+                  ),
+                  const Divider(height: 1),
+                  _ApprovalTile(
+                    icon: Icons.edit_calendar,
+                    title: t(lang, T.punchCorrections),
+                    waiting: store.pendingCorrectionCount,
+                    lang: lang,
+                    onTap: () =>
+                        _open(context, CorrectionsScreen(store: store)),
+                  ),
+                  const Divider(height: 1),
                   ListTile(
                     leading: const Icon(Icons.calendar_month),
                     title: Text(t(lang, T.attendance)),
@@ -107,11 +127,21 @@ class SupervisorHome extends StatelessWidget {
                   ),
                   const Divider(height: 1),
                   ListTile(
-                    leading: const Icon(Icons.business),
-                    title: Text(t(lang, T.workSites)),
-                    subtitle: Text('${store.sites.length}'),
+                    leading: const Icon(Icons.apartment),
+                    title: Text(t(lang, T.projects)),
+                    subtitle: Text(
+                      '${store.projects.length} · '
+                      '${store.sites.length} ${t(lang, T.workSites).toLowerCase()}',
+                    ),
                     trailing: const Icon(Icons.chevron_right),
-                    onTap: () => _open(context, SitesScreen(store: store)),
+                    onTap: () => _open(
+                      context,
+                      ProjectsScreen(
+                        store: store,
+                        recognizer: recognizer,
+                        speech: speech,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -224,6 +254,93 @@ class _Count extends StatelessWidget {
           Text(label, style: text.labelMedium, textAlign: TextAlign.center),
         ],
       ),
+    );
+  }
+}
+
+/// A list row for something waiting on the supervisor, with a count badge.
+class _ApprovalTile extends StatelessWidget {
+  const _ApprovalTile({
+    required this.icon,
+    required this.title,
+    required this.waiting,
+    required this.lang,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final int waiting;
+  final String lang;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => ListTile(
+        leading: Badge(
+          isLabelVisible: waiting > 0,
+          label: Text('$waiting'),
+          child: Icon(icon),
+        ),
+        title: Text(title),
+        subtitle: waiting > 0
+            ? Text(t(lang, T.waitingCount).replaceAll('{n}', '$waiting'))
+            : null,
+        trailing: const Icon(Icons.chevron_right),
+        onTap: onTap,
+      );
+}
+
+/// Loads or removes the demo week (see `demo_data.dart`), after a
+/// confirmation. Only reachable inside the supervisor's PIN session.
+class _DemoMenu extends StatelessWidget {
+  const _DemoMenu({required this.store});
+
+  final AttendanceStore store;
+
+  Future<void> _run(BuildContext context, {required bool load}) async {
+    final lang = store.languageCode;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(t(lang, load ? T.loadDemo : T.removeDemo)),
+        content: Text(t(lang, load ? T.loadDemoConfirm : T.removeDemoConfirm)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(t(lang, T.cancel)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(t(lang, load ? T.loadDemo : T.removeDemo)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    if (load) {
+      await loadDemoData(store);
+    } else {
+      await removeDemoData(store);
+    }
+    if (context.mounted) {
+      showSnack(context, t(lang, load ? T.demoLoaded : T.demoRemoved));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lang = store.languageCode;
+    final loaded = hasDemoData(store);
+    return PopupMenuButton<bool>(
+      tooltip: t(lang, T.demoData),
+      icon: const Icon(Icons.science_outlined),
+      onSelected: (load) => _run(context, load: load),
+      itemBuilder: (_) => [
+        if (!loaded)
+          PopupMenuItem(value: true, child: Text(t(lang, T.loadDemo)))
+        else
+          PopupMenuItem(value: false, child: Text(t(lang, T.removeDemo))),
+      ],
     );
   }
 }

@@ -49,7 +49,13 @@ class LocationFix {
     required this.longitude,
     required this.accuracyMeters,
     required this.isMocked,
+    this.fixTime,
   });
+
+  /// When the fix was taken, as the location system reports it. On Android
+  /// with GPS this comes from the satellites, independent of the phone's
+  /// clock; on iOS it follows the phone's clock, so it never disagrees.
+  final DateTime? fixTime;
 
   final double latitude;
   final double longitude;
@@ -107,8 +113,29 @@ class LocationService {
       longitude: position.longitude,
       accuracyMeters: position.accuracy,
       isMocked: position.isMocked,
+      fixTime: position.timestamp,
     );
   }
+}
+
+/// Coordinates typed by a supervisor, range-checked. Null when either is not
+/// a finite number, or latitude is outside ±90 or longitude outside ±180.
+(double, double)? parseLatLng(String latitude, String longitude) {
+  final lat = double.tryParse(latitude.trim());
+  final lng = double.tryParse(longitude.trim());
+  if (lat == null || lng == null || !lat.isFinite || !lng.isFinite) {
+    return null;
+  }
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  return (lat, lng);
+}
+
+/// Splits a pair pasted from a map app, such as "25.2048, 55.2708", into its
+/// two halves. Null when the text is not exactly two parts.
+(String, String)? splitLatLngPair(String text) {
+  final parts =
+      text.split(RegExp(r'[,\s]+')).where((p) => p.isNotEmpty).toList();
+  return parts.length == 2 ? (parts[0], parts[1]) : null;
 }
 
 const _earthRadiusMeters = 6371008.8;

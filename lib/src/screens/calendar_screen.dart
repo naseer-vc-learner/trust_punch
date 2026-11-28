@@ -3,9 +3,12 @@ import 'package:intl/intl.dart';
 
 import '../i18n/ui_text.dart';
 import '../models/attendance.dart';
+import '../models/requests.dart';
+import '../services/punch_photo_store.dart';
 import '../services/supervisor_lock.dart';
 import '../store/attendance_store.dart';
 import 'leave_screen.dart' show leaveTypeLabel;
+import 'punch_result_screen.dart' show PunchPhotoThumb;
 import 'shared_widgets.dart' show formatBySite, formatHours;
 import 'supervisor_pin.dart';
 
@@ -48,7 +51,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
   }
 
   void _shiftMonth(int delta) {
-    setState(() => _month = DateTime(_month.year, _month.month + delta));
+    final month = DateTime(_month.year, _month.month + delta);
+    // Months older than the store keeps in memory are read on demand.
+    widget.store.ensureMonthLoaded(month.year, month.month);
+    setState(() => _month = month);
   }
 
   /// Wipes every punch on the phone: supervisor PIN first, then an explicit
@@ -81,6 +87,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
     if (confirmed != true) return;
 
     await widget.store.clearPunches();
+    // The selfies belong to those punches and go with them.
+    await (await PunchPhotoStore.shared()).deleteAll();
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -188,6 +196,9 @@ class _CalendarScreenState extends State<CalendarScreen> {
         }
         final flags = widget.store.flagsFor(worker.id, _selected);
         final bySite = widget.store.workedBySiteOn(worker.id, _selected);
+        final travel = widget.store.travelOn(worker.id, _selected);
+        final overtimeStatus =
+            widget.store.overtimeStatus(worker.id, _selected);
         return Card(
           child: ListTile(
             leading: CircleAvatar(child: Text(worker.name.characters.first)),
@@ -201,9 +212,22 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 if (flags.late) t(lang, T.lateFlag),
                 if (flags.overtime) t(lang, T.overtimeFlag),
                 if (flags.short) t(lang, T.shortFlag),
+                if (flags.autoCheckout) t(lang, T.autoCheckoutFlag),
+                if (flags.corrected) t(lang, T.correctedFlag),
+                if (flags.clockSuspect) t(lang, T.clockFlag),
+                if (overtimeStatus != null)
+                  '${t(lang, T.overtimeLabel)} '
+                      '${formatHours(widget.store.overtimeOn(worker.id, _selected))} '
+                      '(${t(lang, switch (overtimeStatus) {
+                    RequestStatus.pending => T.leavePending,
+                    RequestStatus.approved => T.leaveApproved,
+                    RequestStatus.rejected => T.leaveRejected,
+                  }).toLowerCase()})',
               ].join(' · '),
               if (bySite.isNotEmpty)
                 '${t(lang, T.hoursBySite)}: ${formatBySite(bySite)}',
+              if (travel > Duration.zero)
+                '${t(lang, T.travel)}: ${formatHours(travel)}',
             ].join('\n')),
             trailing: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -223,22 +247,34 @@ class _CalendarScreenState extends State<CalendarScreen> {
         (punch) => Card(
           child: ListTile(
             dense: true,
-            leading: Icon(switch (punch.type) {
-              PunchType.checkIn => Icons.login,
-              PunchType.checkOut => Icons.logout,
-              PunchType.breakStart => Icons.free_breakfast,
-              PunchType.breakEnd => Icons.work_outline,
-            }),
+            leading: punch.photo != null
+                ? PunchPhotoThumb(punch: punch)
+                : Icon(switch (punch.type) {
+                    PunchType.checkIn => Icons.login,
+                    PunchType.checkOut => Icons.logout,
+                    PunchType.breakStart => Icons.free_breakfast,
+                    PunchType.breakEnd => Icons.work_outline,
+                  }),
             title: Text('${punch.workerName} · ${punch.siteName}'),
-            subtitle: Text(t(
-              widget.store.languageCode,
-              switch (punch.type) {
-                PunchType.checkIn => T.checkInLabel,
-                PunchType.checkOut => T.checkOutLabel,
-                PunchType.breakStart => T.takeBreak,
-                PunchType.breakEnd => T.endBreak,
-              },
-            )),
+            subtitle: Text([
+              t(
+                widget.store.languageCode,
+                switch (punch.type) {
+                  PunchType.checkIn => T.checkInLabel,
+                  PunchType.checkOut => T.checkOutLabel,
+                  PunchType.breakStart => T.takeBreak,
+                  PunchType.breakEnd => T.endBreak,
+                },
+              ),
+              // Recorded by the app when the worker moved on without
+              // checking out; the time is an estimate.
+              if (punch.auto)
+                t(widget.store.languageCode, T.autoCheckoutFlag),
+              if (punch.corrected)
+                t(widget.store.languageCode, T.correctedFlag),
+              if (punch.clockSuspect)
+                t(widget.store.languageCode, T.clockFlag),
+            ].join(' · ')),
             trailing: Text(_clock.format(punch.at)),
           ),
         ),

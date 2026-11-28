@@ -7,8 +7,11 @@ import '../i18n/phrases.dart';
 import '../i18n/ui_text.dart';
 import '../models/attendance.dart';
 import '../services/face_recognizer.dart';
+import '../services/punch_photo_store.dart';
+import '../services/shift_reminders.dart';
 import '../services/speech_service.dart';
 import '../store/attendance_store.dart';
+import 'punch_result_screen.dart';
 import 'verify_screen.dart';
 
 // Pieces the worker, kiosk and supervisor home screens share.
@@ -39,6 +42,7 @@ Future<void> runPunch(
   required FaceRecognizer recognizer,
   required SpeechService speech,
   Worker? restrictTo,
+  bool remindAtShiftEnd = false,
 }) async {
   final lang = store.languageCode;
   if (store.workers.isEmpty) {
@@ -64,35 +68,122 @@ Future<void> runPunch(
   );
   if (intent == null || !context.mounted) return;
 
-  // Re-checked after the camera round trip: the worker's state could have
-  // moved on while the verify screen was open.
-  if (!store.allowedActions(intent.worker.id).contains(intent.type)) {
+  // Planned again after the camera round trip: the worker's state could have
+  // moved on while the verify screen was open, and the travel estimate for
+  // an automatic check-out must use the moment the punch is saved.
+  final now = DateTime.now();
+  if (store.clockLooksWrong(now)) {
+    showSnack(context, t(lang, T.clockWrong));
+    return;
+  }
+  final plan = store.planAt(intent.worker.id, intent.site, now: now);
+  if (!plan.actions.contains(intent.type)) {
     showSnack(context, t(lang, T.tryAgain));
     return;
   }
 
-  await store.add(Punch(
-    type: intent.type,
-    at: DateTime.now(),
-    workerId: intent.worker.id,
-    employeeId: intent.worker.employeeId,
-    workerName: intent.worker.name,
-    siteId: intent.site.id,
-    siteName: intent.site.name,
-    latitude: intent.latitude,
-    longitude: intent.longitude,
-    distanceMeters: intent.distanceMeters,
-  ));
+  // Phone clock against GPS time: flagged for the supervisor, not refused,
+  // since a slow GPS fix can be a little old by the time the face is matched.
+  final gps = intent.gpsTime;
+  final clockSuspect =
+      gps != null && now.difference(gps).abs() > gpsClockTolerance;
+
+  // The selfie is evidence, not a gate: if it cannot be saved the punch is
+  // still recorded, just without a photo.
+  String? photoName;
+  final photo = intent.photo;
+  if (photo != null) {
+    try {
+      photoName = await (await PunchPhotoStore.shared()).save(
+        photo,
+        workerId: intent.worker.id,
+        at: now,
+      );
+    } catch (e) {
+      debugPrint('Punch photo not saved: $e');
+    }
+  }
+
+  await store.recordPunch(
+    plan,
+    Punch(
+      type: intent.type,
+      at: now,
+      workerId: intent.worker.id,
+      employeeId: intent.worker.employeeId,
+      workerName: intent.worker.name,
+      siteId: intent.site.id,
+      siteName: intent.site.name,
+      latitude: intent.latitude,
+      longitude: intent.longitude,
+      distanceMeters: intent.distanceMeters,
+      photo: photoName,
+      clockSuspect: clockSuspect,
+    ),
+  );
   if (!context.mounted) return;
+
+  if (remindAtShiftEnd) {
+    unawaited(
+      _updateShiftReminder(lang, intent.worker, intent.site, intent.type, now),
+    );
+  }
 
   speech.say(switch (intent.type) {
     PunchType.checkIn || PunchType.breakEnd => Phrase.workStarted,
     PunchType.checkOut || PunchType.breakStart => Phrase.workFinished,
   });
-  showSnack(
-    context,
-    '${intent.worker.name} · ${DateFormat('HH:mm').format(DateTime.now())}',
+  final auto = plan.autoClose;
+  await Navigator.of(context).push(
+    MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (_) => PunchSuccessScreen(
+        lang: lang,
+        workerName: intent.worker.name,
+        type: intent.type,
+        siteName: intent.site.name,
+        at: now,
+        photo: photo,
+        autoCheckout: auto == null
+            ? null
+            : '${t(lang, T.autoCheckedOut).replaceAll('{site}', auto.siteName)} '
+                  '${DateFormat('HH:mm').format(auto.at)}',
+      ),
+    ),
   );
+}
+
+/// Starting or resuming work sets a reminder for the location's shift end;
+/// finishing cancels it. A break keeps it: the worker is still checked in.
+Future<void> _updateShiftReminder(
+  String lang,
+  Worker worker,
+  Site site,
+  PunchType type,
+  DateTime now,
+) async {
+  final reminders = ShiftReminders.instance;
+  switch (type) {
+    case PunchType.checkOut:
+      await reminders.cancel(worker.id);
+    case PunchType.checkIn || PunchType.breakEnd:
+      final at = reminderTimeFor(site, now);
+      if (at == null) {
+        await reminders.cancel(worker.id);
+        return;
+      }
+      await reminders.remind(
+        workerId: worker.id,
+        at: at,
+        title: t(lang, T.reminderTitle).replaceAll('{site}', site.name),
+        body: t(
+          lang,
+          T.reminderBody,
+        ).replaceAll('{time}', formatShiftTime(site.shiftEndMinutes)),
+      );
+    case PunchType.breakStart:
+      break;
+  }
 }
 
 /// Rebuilds its child every second: drives the wall clock and the live
@@ -192,12 +283,11 @@ class ClockCard extends StatelessWidget {
         Text(
           _time.format(now),
           style: Theme.of(context).textTheme.displayMedium?.copyWith(
-                fontFeatures: const [FontFeature.tabularFigures()],
-                fontWeight: FontWeight.w300,
-              ),
+            fontFeatures: const [FontFeature.tabularFigures()],
+            fontWeight: FontWeight.w300,
+          ),
         ),
-        Text(_date.format(now),
-            style: Theme.of(context).textTheme.bodyMedium),
+        Text(_date.format(now), style: Theme.of(context).textTheme.bodyMedium),
       ],
     );
   }
@@ -205,11 +295,7 @@ class ClockCard extends StatelessWidget {
 
 /// Today's status, hours and flags for one worker.
 class WorkerCard extends StatelessWidget {
-  const WorkerCard({
-    super.key,
-    required this.store,
-    required this.worker,
-  });
+  const WorkerCard({super.key, required this.store, required this.worker});
 
   final AttendanceStore store;
   final Worker worker;
@@ -224,24 +310,34 @@ class WorkerCard extends StatelessWidget {
     final bySite = store.workedBySiteOn(worker.id, today);
     final onLeave = store.leaveOn(worker.id, today) != null;
     final flags = store.flagsFor(worker.id, today);
+    final travel = store.travelOn(worker.id, today);
+    // Role · job · project, one line per project the worker is on.
+    final assignment = [
+      for (final a in worker.assignments)
+        [
+          a.role,
+          a.job,
+          store.projectById(a.projectId)?.name ?? '',
+        ].where((s) => s.isNotEmpty).join(' · '),
+    ].where((s) => s.isNotEmpty).join('\n');
 
     final scheme = Theme.of(context).colorScheme;
     final (color, icon, label) = switch (status) {
       WorkerStatus.working => (
-          scheme.primaryContainer,
-          Icons.check_circle,
-          t(lang, T.checkedIn)
-        ),
+        scheme.primaryContainer,
+        Icons.check_circle,
+        t(lang, T.checkedIn),
+      ),
       WorkerStatus.onBreak => (
-          const Color(0xFFFFE0B2),
-          Icons.free_breakfast,
-          t(lang, T.onBreak)
-        ),
+        const Color(0xFFFFE0B2),
+        Icons.free_breakfast,
+        t(lang, T.onBreak),
+      ),
       WorkerStatus.off => (
-          scheme.surfaceContainerHighest,
-          Icons.pause_circle_outline,
-          t(lang, T.notCheckedIn)
-        ),
+        scheme.surfaceContainerHighest,
+        Icons.pause_circle_outline,
+        t(lang, T.notCheckedIn),
+      ),
     };
 
     return Card(
@@ -259,11 +355,20 @@ class WorkerCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(worker.name,
-                          style: Theme.of(context).textTheme.titleMedium),
+                      Text(
+                        worker.name,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
                       if (worker.employeeId.isNotEmpty)
-                        Text(worker.employeeId,
-                            style: Theme.of(context).textTheme.bodySmall),
+                        Text(
+                          worker.employeeId,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      if (assignment.isNotEmpty)
+                        Text(
+                          assignment,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
                     ],
                   ),
                 ),
@@ -298,10 +403,39 @@ class WorkerCard extends StatelessWidget {
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
+            // Time between leaving one location and arriving at the next:
+            // shown, but not counted in the hours above.
+            if (travel > Duration.zero) ...[
+              const SizedBox(height: 4),
+              Text(
+                '${t(lang, T.travel)}: ${formatHours(travel)}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
             const SizedBox(height: 12),
             Wrap(
               spacing: 6,
               children: [
+                if (flags.autoCheckout)
+                  Chip(
+                    avatar: const Icon(Icons.swap_horiz, size: 18),
+                    label: Text(t(lang, T.autoCheckoutFlag)),
+                    backgroundColor: scheme.secondaryContainer,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                if (flags.clockSuspect)
+                  Chip(
+                    avatar: const Icon(Icons.schedule, size: 18),
+                    label: Text(t(lang, T.clockFlag)),
+                    backgroundColor: scheme.errorContainer,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                if (flags.corrected)
+                  Chip(
+                    avatar: const Icon(Icons.edit_calendar, size: 18),
+                    label: Text(t(lang, T.correctedFlag)),
+                    visualDensity: VisualDensity.compact,
+                  ),
                 // "Not working" says nothing new beside "On leave"; but a
                 // worker on leave who clocked in anyway keeps both chips.
                 if (!(onLeave && status == WorkerStatus.off))
@@ -366,8 +500,11 @@ class _Stat extends StatelessWidget {
             Icon(icon, size: 16),
             const SizedBox(width: 4),
             Flexible(
-              child: Text(label,
-                  style: text.labelMedium, overflow: TextOverflow.ellipsis),
+              child: Text(
+                label,
+                style: text.labelMedium,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ],
         ),

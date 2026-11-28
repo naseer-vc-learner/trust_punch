@@ -44,6 +44,21 @@ dependencies:
   flutter_tts: ^4.2.5
   safe_device: ^1.4.1
   crypto: ^3.0.7
+  # Where punch selfies are kept: the app's private support folder.
+  path_provider: 2.1.6
+  # End-of-shift reminder on a worker's own phone. 22.3.3 is the last of the
+  # 22 line; 23.x was weeks old when chosen.
+  flutter_local_notifications: 22.3.3
+  timezone: 0.11.2
+  # Location map preview with the 50 m check-in circle (OpenStreetMap tiles;
+  # needs internet, supervisor screens only).
+  flutter_map: 8.3.2
+  latlong2: 0.10.1
+  # Durable storage for punches and records: one row per change instead of
+  # rewriting everything (shared_preferences cannot keep up with a busy
+  # gate). SQLite through dart:ffi; 3.x bundles SQLite itself via build hooks.
+  # 3.5.2 is the newest that resolves with Flutter 3.44 (3.6+ needs newer meta).
+  sqlite3: 3.5.2
 
 dev_dependencies:
   flutter_test:

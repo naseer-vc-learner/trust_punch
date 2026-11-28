@@ -4,6 +4,7 @@ import '../i18n/ui_text.dart';
 import '../services/face_recognizer.dart';
 import '../services/speech_service.dart';
 import '../store/attendance_store.dart';
+import 'approvals_screens.dart' show requestCorrectionFlow;
 import 'leave_screen.dart';
 import 'shared_widgets.dart';
 
@@ -67,6 +68,15 @@ class KioskHome extends StatelessWidget {
                 minimumSize: const Size.fromHeight(52),
               ),
               onPressed: () => requestLeaveFlow(context, store),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.edit_calendar),
+              label: Text(t(lang, T.fixPunch)),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(52),
+              ),
+              onPressed: () => requestCorrectionFlow(context, store),
             ),
             const SizedBox(height: 12),
             VoiceBar(store: store, speech: speech),

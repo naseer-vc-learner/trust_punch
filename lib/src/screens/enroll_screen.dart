@@ -72,7 +72,13 @@ class _EnrollScreenState extends State<EnrollScreen> {
     });
     try {
       final path = await _camera.capturePhoto();
-      final embedding = await widget.recognizer.embedFromPhoto(path);
+      final List<double>? embedding;
+      try {
+        embedding = await widget.recognizer.embedFromPhoto(path);
+      } finally {
+        // Enrolment keeps only the embedding, never the photo.
+        await FaceRecognizer.discardPhoto(path);
+      }
 
       if (embedding == null) {
         setState(() => _notice = t(widget.lang, T.noFaceFound));

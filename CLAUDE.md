@@ -1,7 +1,8 @@
 # TrustPunch
 
 Attendance module of an HRMS, built as a **demonstration**. Fully offline: no
-backend, no network, no accounts. Everything lives on the device in
+backend, no network, no accounts. Everything lives on the device: records in
+SQLite (`attendance.db` in the app support folder), small settings in
 `shared_preferences`.
 
 Target device is a physical iPhone — the iOS simulator has no camera, so
@@ -31,7 +32,10 @@ lib/
   src/
     models/attendance.dart       Worker, Site, Punch, WorkerStatus, cosineSimilarity
     models/leave.dart            LeaveRequest (annual/sick/unpaid; pending/approved/rejected)
-    store/attendance_store.dart  all state + persistence + hours/break/flag maths
+    models/project.dart          Project (jobs = activities, roles); Site carries projectId + shift
+    models/requests.dart         OvertimeDecision, CorrectionRequest (pending/approved/rejected)
+    store/attendance_store.dart  all state, in-memory punch index, hours/break/flag maths
+    store/attendance_database.dart  SQLite: one row per punch / record, WAL
     i18n/phrases.dart            spoken lines + language list
     i18n/ui_text.dart            on-screen text (enum T), isRtl()
     services/
@@ -42,15 +46,25 @@ lib/
       integrity_service.dart     jailbreak / emulator check
       speech_service.dart        TTS, voice availability, fallback voices
       supervisor_lock.dart       supervisor PIN: salted hash, lockout after 5 tries
+      punch_photo_store.dart     small selfie per punch, app support dir, delete-all
+      shift_reminders.dart       shift-end notification on "My own phone" (local, inexact)
     screens/
       role_root.dart             role picker + which home to show; supervisor idle lock
       worker_home.dart           "My own phone" (1:1): next-action button, my calendar/leave
       kiosk_home.dart            "Gate phone" (1:N): scan face, request leave, today's list
-      supervisor_home.dart       on-site board, leave approvals, calendar, workers, sites
+      supervisor_home.dart       on-site board, leave approvals, calendar, workers, projects
+      project_screens.dart       projects: Today dashboard tab + Setup tab (jobs,
+                                 roles, locations + shifts, workers)
+      punch_result_screen.dart   full-screen green success / red failure, photo thumb
+      approvals_screens.dart     overtime + correction approvals; "Fix a missed punch" form
+      location_map.dart          OpenStreetMap preview of locations with the 50 m circle
+    demo/demo_data.dart          load / remove a tagged demo week (supervisor flask menu)
       shared_widgets.dart        runPunch(), WorkerCard, ClockCard, VoiceBar, formatHours
                                  + verify, enroll, workers, sites, calendar, leave,
                                  supervisor_pin (PIN dialogs)
-test/                            lock, shift flags, leave, roles (`flutter test`)
+test/                            lock, shift flags, leave, roles, projects, punch
+                                 evidence + dashboard, approvals, reminders,
+                                 demo data, map (`flutter test`)
 assets/models/mobilefacenet.tflite   112×112 → 192-dim embedding
 _old_firebase_app/               the previous Firebase version, kept for reference
 ```
@@ -62,9 +76,15 @@ failure: device not jailbroken → GPS fix is real, precise to ±30 m, and
 within 50 m of a known site → liveness challenge passed → face matches
 someone enrolled.
 
-Then `allowedActions()` decides what is legal next. If only one action is
-possible it happens without asking; only a worker already on the clock is
-offered a choice (finish vs break).
+Once the face is known, `siteFor(worker, locations in range)` picks which
+location the punch belongs to: only the worker's own projects count
+(`canPunchAt`), and where several share the place the shift decides; it
+refuses when none is theirs. Then `planAt(worker, site)` decides what is
+legal next, and any automatic check-out (and shift-handover check-in) to
+record first. If only one action is possible it happens without
+asking; only a worker already on the clock at this location is offered a
+choice (finish vs break). `runPunch()` plans again at save time and writes the
+automatic check-out and the punch together (`recordPunch`).
 
 ## Decisions worth not re-litigating
 
@@ -107,8 +127,41 @@ offered a choice (finish vs break).
   not contained in it.
 - **A session left open on a past day stops accruing.** Only today keeps
   counting, or a forgotten check-out would add whole days.
-- **Check-out is pinned to the site the session opened at**, so hours cannot
-  land against a site nobody worked.
+- **Projects own locations; workers can be on several projects**, with a
+  role and a job (activity) on each (`Worker.projectId/role/job` is the
+  first, `otherProjects` the rest; `assignments` lists all). They may punch
+  at the locations of any of their projects, no other. "Assign worker"
+  adds a project, never moves; "Remove from this project" refuses the last
+  one. Overtime, the 8 h day, leave and corrections stay per person, across
+  projects; each project's dashboard counts only hours at its own
+  locations and lists the worker under "At another project now" when they
+  are on the clock elsewhere. Lateness is still judged on the day's first
+  check-in only. Sites and workers from before projects existed are moved
+  into "General" on first load (`generalProjectId`). A project with
+  locations or workers can't be deleted.
+- **One place, several projects = one location record per project**, each
+  with its own shift ("Same place as another project" copies the place).
+  Locations within 50 m of each other count as the same place. At a punch
+  the shift decides (`siteFor`): on the clock there and within that shift
+  → stay; otherwise the shift running now (counting 30 min early,
+  `earlyCheckIn`); none running → nearest shift in time; **two running
+  (overlap) → the worker taps the project**. Staying on past one project's
+  shift while the other's runs **splits the session at that shift end**
+  on the next punch: auto check-out there + auto check-in at the other
+  project's location, same minute, no travel (`PunchPlan.autoOpen`). Until
+  that next punch the dashboard still shows them on the first project,
+  under "after shift".
+- **Moving location without checking out closes the old one automatically**
+  (replaces the old "check-out is pinned to its site" rule). The close time
+  is the new check-in minus estimated travel (straight-line distance at
+  30 km/h), never before the last punch there. The gap is shown as Travel,
+  not counted as work; the punch is marked `auto` and the day gets an
+  "Auto check-out" flag for the supervisor.
+- **A session left open on an earlier day is closed at that location's
+  shift end** when the worker next checks in, instead of accruing.
+- **Each location has its own shift** (default 09:00–17:00). Late = first
+  check-in of the day after that location's start + 10 min. Overtime/short
+  stay against a fixed 8 h day across all locations.
 
 ## Known limits (matters before this is used for real)
 
@@ -127,21 +180,109 @@ offered a choice (finish vs break).
   angles help; a true profile will not match.
 - **Team mode (1:N) is inherently riskier than individual mode (1:1)** — every
   extra worker is another chance to be the closest match by accident.
-- Shift rules are hardcoded: 09:00 start, 10 min grace, 8 h day
-  (`attendance_store.dart`).
+- Grace (10 min), the 8 h day and the 30 km/h travel speed are constants in
+  `attendance_store.dart`. Overnight shifts (end before start) are refused.
+- **Travel is an estimate**: straight-line distance ignores roads, so real
+  journeys are longer; the auto check-out time is shown as estimated.
+- **Project screens are English-only**, like the other supervisor screens.
+- **Storage is SQLite, reads are from memory.** `package:sqlite3` (FFI,
+  synchronous, SQLite bundled by build hooks; pinned 3.5.2 because 3.6+
+  needs a newer Flutter than 3.44). Punches are real columns with indexes
+  on (worker, time) and day; workers/sites/projects/leave/corrections/
+  overtime are JSON rows in `records`. A punch is one insert (~0.04 ms,
+  flat however long the history); the old `shared_preferences` storage
+  re-encoded everything on every punch. In memory, punches are indexed by
+  worker and by day, each in time order (corrections insert in the past;
+  every hours calculation walks a day in order). Older installs are
+  imported from preferences once (`importedPrefs` marker), then the old
+  keys are removed. `secure_delete` is on so deleted rows are overwritten.
+- **Only the last 35 days of punches are in memory** (`punchMemoryDays`),
+  plus each worker's newest punch however old, so an open session is never
+  missed. The calendar loads an older month on demand
+  (`ensureMonthLoaded`); a correction loads its day's month before judging
+  it. Pending overtime covers the window only. A gate phone left running
+  drops days that leave the window on the first punch of a new day.
+- **Tests get a fresh in-memory database each** (`test/flutter_test_config.dart`
+  via `AttendanceDatabase.debugUse`); reloading the store within a test
+  reads the same database, as a restart would. `storage_scale_test.dart`
+  runs 3,000 workers × 4 punches × 7 days on a real file and prints timings.
+- **Overtime = worked beyond 8 h/day; paid only once approved.** Finished
+  days with overtime wait in "Overtime approvals". `payableOn` = up to 8 h
+  plus the approved minutes (capped at that day's overtime). Decisions are
+  final, like leave.
+- **Corrections cover a missed check-in or check-out only**, need a reason,
+  and change nothing until approved. An approved check-out replaces the
+  closing punch of the session its time falls in (usually an automatic
+  one); an approved check-in replaces a later check-in that started the same
+  session; otherwise the punch is added. The day must still pass
+  `validDay`, or approval is refused and the request stays pending. Approved
+  punches are marked `corrected`; the request keeps what it replaced.
+- **Clock checks:** a punch is refused when the phone's clock is more than
+  2 min earlier than the newest punch on the phone (clock set back). It is
+  flagged `clockSuspect` (not refused) when the phone's clock differs from
+  the GPS fix time by more than 5 min.
+- **Demo data is tagged and removable.** The supervisor's flask menu loads
+  project `demo-project` ("Al Wasl Tower (demo)") plus `demo-project-evening`
+  sharing Gate A 16:00–22:00 (Joseph is on both; one day he stays on and
+  the hours split at 16:00), sites `demo-site-a/b` in
+  Dubai, workers `demo-w1..5` with **no face data** (so no real face can
+  match them), and the last six working days plus today up to now —
+  generated through `planAt`/`recordPunch`, so auto check-outs and travel
+  are real. "Remove demo data" deletes exactly those ids and their records
+  (`removeRecordsOf`). Bulk writes use `AttendanceStore.batch`: one
+  database transaction, listeners told once at the end.
+- **Shift-end reminders only on "My own phone"**: check-in / end of break
+  schedules one for that location's shift end (if still ahead), check-out
+  cancels it; gate phones never schedule. Inexact scheduling, so no
+  exact-alarm permission; failures never block a punch. Android needs
+  desugaring + the two receivers in the manifest; iOS sets the
+  notification delegate in `AppDelegate.swift`.
+- **A small selfie is kept per punch** (≤360 px, JPEG 70, file name on
+  `Punch.photo`) as evidence; the full-size camera photo and the rotated
+  temp copy are deleted right after use, at check-in and enrolment alike.
+  Selfies live in the app support folder, show in the calendar and the
+  green result screen, and are removed by "Delete all attendance" — there
+  is no age-based retention yet. Android backup and device transfer are off
+  (`allowBackup=false` + `data_extraction_rules.xml`); **iOS files are not
+  yet excluded from iCloud/computer backup.**
+- **Locations can be added by typed coordinates** (supervisor only, range
+  checked; a "lat, long" pair pasted from a map app is split). They skip the
+  30 m GPS check, so a typo puts the 50 m circle in the wrong place — the
+  coordinates show under each location to check against a map.
 - **Supervisor screens are English-only** (PIN dialogs, delete-all); `t()`
   falls back to English. Worker-facing text is in all six languages.
-- **The PIN lock stops casual misuse, not a rooted phone**: the hash and all
-  other data sit in plain `shared_preferences`.
+- **The PIN lock stops casual misuse, not a rooted phone**: the hash sits in
+  plain `shared_preferences` and the attendance database is not encrypted
+  (app-private folder only; SQLCipher would be the step up).
 - **Leave is a record, not a policy**: no balances or entitlements, days are
   calendar days (weekends included), and approved leave does not stop a
   check-in (both chips show). The Leave screen is English-only; only the
   "On leave" chip is in all six languages.
 - **GPS accuracy limit is 30 m** (`maxFixAccuracyMeters`), also applied when
   saving a site. It may refuse honest check-ins indoors; tune with real sites.
+- **The GPS clock check only means something on Android**: iOS reports fix
+  times from the phone's own clock, so it never disagrees. The
+  "clock set back" check works on both, but only after at least one punch.
+- **Reminders can arrive a few minutes late** (inexact scheduling) and only
+  if the worker allowed notifications. Correction and overtime screens are
+  English-only, like the other supervisor screens; the "Fix a missed punch"
+  button and the reminder text are in all six languages.
+- **The location map is the app's only network use**, and only when a
+  supervisor opens it: OpenStreetMap tiles (identified as
+  `com.example.trust_punch`, credit shown as the licence requires). Fine
+  for a demo; OSM's tile policy does not allow heavy production use, so a
+  real deployment needs its own or a commercial tile provider. Offline it
+  shows a banner; nothing else depends on it.
 
 ## Possible next steps
 
-Discussed but not built: store the verification selfie per punch, CSV export
-for payroll, full-screen green/red result feedback, photo-based site and worker
-identity, clock-tampering detection.
+Discussed but not built: CSV/Excel payroll export (with payable hours),
+photo-based site and worker identity, iOS backup exclusion for selfies and
+data (now including `attendance.db`).
+
+For a busy gate (~12,000 punches/day), storage is done; still to do, in
+order of what people at the gate feel: keep camera/detector warm between
+people, cache the kiosk's GPS fix, TFLite in an isolate with `Float32List`
+embeddings, passive liveness (active challenge only when borderline),
+badge/QR + 1:1 instead of 1:N over thousands, and several kiosks synced
+through the backend. Measure with `flutter run --profile`, not `--debug`.
