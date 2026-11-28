@@ -718,10 +718,48 @@ class AttendanceStore extends ChangeNotifier {
     return Duration(seconds: (meters / travelSpeedMetersPerSecond).round());
   }
 
+  /// How [workerId]'s session open right now was made: on their own phone
+  /// or at a gate phone. Null when they are not checked in today (a session
+  /// left open on an earlier day is closed by the next check-in, whichever
+  /// way that comes), or when only the app or a supervisor touched it.
+  ///
+  /// The session runs back to the last check-out the worker made; the app's
+  /// automatic check-outs (moving location, shift handover) do not end it.
+  PunchVia? openSessionVia(String workerId, {DateTime? now}) {
+    final at = now ?? DateTime.now();
+    final last = lastPunchFor(workerId);
+    if (last == null ||
+        last.type == PunchType.checkOut ||
+        !_isSameDay(last.at, at)) {
+      return null;
+    }
+    final today = punchesFor(workerId, at);
+    for (var i = today.length - 1; i >= 0; i--) {
+      final p = today[i];
+      if (p.type == PunchType.checkOut && !p.auto) break;
+      if (p.via != null) return p.via;
+    }
+    return null;
+  }
+
+  /// Whether [workerId] may punch [via] this way now: always, unless they are
+  /// checked in the other way. One session, one way, until they check out.
+  bool viaAllowed(String workerId, PunchVia via, {DateTime? now}) {
+    final open = openSessionVia(workerId, now: now);
+    return open == null || open == via;
+  }
+
   /// Saves the worker's own [punch], after anything [plan] needs first, as
-  /// one write.
+  /// one write. Throws [StateError] for a punch made the other way while a
+  /// session is open (see [viaAllowed]); the screens check first.
   Future<void> recordPunch(PunchPlan plan, Punch punch) async {
-    final all = [?plan.autoClose, ?plan.autoOpen, punch];
+    final via = punch.via;
+    if (via != null && !viaAllowed(punch.workerId, via, now: punch.at)) {
+      throw StateError('${punch.workerName} is checked in the other way');
+    }
+    final all = [
+      for (final p in [?plan.autoClose, ?plan.autoOpen, punch]) _withId(p),
+    ];
     _db.transaction(() => all.forEach(_db.insertPunch));
     _moveWindow();
     all.forEach(_index);
@@ -1182,6 +1220,9 @@ class AttendanceStore extends ChangeNotifier {
       longitude: site?.longitude ?? 0,
       distanceMeters: 0,
       corrected: true,
+      id: newPunchId(),
+      // Lets a server that already has the replaced punch set it aside.
+      replaces: replaced?.id,
     );
 
     final after = [
@@ -1325,11 +1366,29 @@ class AttendanceStore extends ChangeNotifier {
   // ------------------------------------------------------------------ writes
 
   Future<void> add(Punch punch) async {
-    _db.insertPunch(punch);
+    final saved = _withId(punch);
+    _db.insertPunch(saved);
     _moveWindow();
-    _index(punch);
+    _index(saved);
     _changed();
   }
+
+  /// Every saved punch has a permanent id, made here on the phone.
+  static Punch _withId(Punch p) => p.id == null ? p.withId(newPunchId()) : p;
+
+  // ------------------------------------------------------------------ outbox
+
+  /// Punches not yet sent to a server, oldest first. Only the connected
+  /// app reads these; the demo app never sends anything.
+  List<Punch> punchesToSend({int limit = 200}) => _db.punchesToSend(limit);
+
+  int get punchesToSendCount => _db.punchesToSendCount;
+
+  /// Sent punches whose state is [AttendanceDatabase.uploaded],
+  /// [AttendanceDatabase.refused] or [AttendanceDatabase.keptOnPhone].
+  int punchesSentAs(int state) => _db.countInState(state);
+
+  void markSent(Iterable<String> ids, int state) => _db.markSent(ids, state);
 
   Future<void> addWorker(Worker worker) async {
     _db.putRecord(_workersKey, worker.id, worker.toJson());

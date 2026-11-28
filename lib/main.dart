@@ -26,12 +26,17 @@ class TrustPunchApp extends StatelessWidget {
     required this.lock,
     required this.recognizer,
     required this.speech,
+    this.pickerFooter,
   });
 
   final AttendanceStore store;
   final SupervisorLock lock;
   final FaceRecognizer recognizer;
   final SpeechService speech;
+
+  /// Shown under the role picker. Nothing in this (demo) app; the connected
+  /// app (lib/main_connected.dart) puts its server line here.
+  final Widget? pickerFooter;
 
   @override
   Widget build(BuildContext context) {
@@ -55,6 +60,7 @@ class TrustPunchApp extends StatelessWidget {
           lock: lock,
           recognizer: recognizer,
           speech: speech,
+          pickerFooter: pickerFooter,
         ),
       ),
     );

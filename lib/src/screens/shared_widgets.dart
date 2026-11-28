@@ -76,6 +76,13 @@ Future<void> runPunch(
     showSnack(context, t(lang, T.clockWrong));
     return;
   }
+  final via = restrictTo != null ? PunchVia.ownPhone : PunchVia.gate;
+  // Checked again at saving: the other phone could have been used meanwhile.
+  if (!store.viaAllowed(intent.worker.id, via, now: now)) {
+    showSnack(context,
+        t(lang, via == PunchVia.gate ? T.inUseOnOwnPhone : T.inUseOnGate));
+    return;
+  }
   final plan = store.planAt(intent.worker.id, intent.site, now: now);
   if (!plan.actions.contains(intent.type)) {
     showSnack(context, t(lang, T.tryAgain));
@@ -119,6 +126,7 @@ Future<void> runPunch(
       distanceMeters: intent.distanceMeters,
       photo: photoName,
       clockSuspect: clockSuspect,
+      via: via,
     ),
   );
   if (!context.mounted) return;

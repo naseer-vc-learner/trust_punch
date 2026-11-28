@@ -59,6 +59,9 @@ dependencies:
   # gate). SQLite through dart:ffi; 3.x bundles SQLite itself via build hooks.
   # 3.5.2 is the newest that resolves with Flutter 3.44 (3.6+ needs newer meta).
   sqlite3: 3.5.2
+  # Connected app only: the phone's server token, in the iOS Keychain /
+  # Android Keystore. Linked into both apps; the demo never calls it.
+  flutter_secure_storage: 11.2.0
 
 dev_dependencies:
   flutter_test:
@@ -76,6 +79,9 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
+  # Plain `flutter run` builds the offline demo app; the connected app
+  # needs --flavor connected -t lib/main_connected.dart.
+  default-flavor: demo
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in

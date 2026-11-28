@@ -11,6 +11,7 @@ import '../services/face_recognizer.dart';
 import '../services/integrity_service.dart';
 import '../services/liveness_detector.dart';
 import '../services/location_service.dart';
+import '../services/punch_guards.dart';
 import '../services/punch_photo_store.dart';
 import '../services/speech_service.dart';
 import '../store/attendance_store.dart';
@@ -92,6 +93,10 @@ class _VerifyScreenState extends State<VerifyScreen> {
   Uint8List? _photo;
 
   String get _lang => widget.store.languageCode;
+
+  /// Their own phone confirms one face; a gate phone finds it among all.
+  PunchVia get _via =>
+      widget.restrictTo != null ? PunchVia.ownPhone : PunchVia.gate;
 
   @override
   void initState() {
@@ -243,6 +248,25 @@ class _VerifyScreenState extends State<VerifyScreen> {
         return;
       }
       _worker = match.worker;
+
+      // One session, one way: checked in on the gate phone means finishing
+      // on the gate phone, and the same for their own phone.
+      if (!widget.store.viaAllowed(match.worker.id, _via)) {
+        _block(
+          '${match.worker.name}: ${t(_lang, _via == PunchVia.gate ? T.inUseOnOwnPhone : T.inUseOnGate)}',
+          Phrase.useSamePhone,
+        );
+        return;
+      }
+      // And not on the clock on another phone (connected app only; offline,
+      // this cannot tell and lets the punch through).
+      if (await PunchGuards.checkedInElsewhere?.call(match.worker) == true) {
+        if (!mounted) return;
+        _block('${match.worker.name}: ${t(_lang, T.inUseOnOtherPhone)}',
+            Phrase.useSamePhone);
+        return;
+      }
+      if (!mounted) return;
 
       // Hours may only land on the worker's own projects. Where several of
       // their projects share this place, the shift decides which.

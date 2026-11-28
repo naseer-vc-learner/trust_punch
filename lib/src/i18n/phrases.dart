@@ -19,6 +19,7 @@ enum Phrase {
   registerFaceFirst,
   addSiteFirst,
   lookAtCamera,
+  useSamePhone,
 }
 
 class SpokenLanguage {
@@ -82,6 +83,7 @@ const phrases = <String, Map<Phrase, String>>{
     Phrase.registerFaceFirst: 'First register your face',
     Phrase.addSiteFirst: 'First add your work place',
     Phrase.lookAtCamera: 'Look at the camera',
+    Phrase.useSamePhone: 'Please finish on the phone you started on.',
   },
   'hi': {
     Phrase.startWork: 'काम शुरू करने के लिए हरा बटन दबाइए',
@@ -99,6 +101,7 @@ const phrases = <String, Map<Phrase, String>>{
     Phrase.registerFaceFirst: 'पहले अपना चेहरा दर्ज कीजिए',
     Phrase.addSiteFirst: 'पहले अपनी काम की जगह जोड़िए',
     Phrase.lookAtCamera: 'कैमरे की ओर देखिए',
+    Phrase.useSamePhone: 'जिस फ़ोन पर शुरू किया था, उसी पर खत्म कीजिए।',
   },
   'ml': {
     Phrase.startWork: 'ജോലി തുടങ്ങാൻ പച്ച ബട്ടൺ അമർത്തുക',
@@ -116,6 +119,7 @@ const phrases = <String, Map<Phrase, String>>{
     Phrase.registerFaceFirst: 'ആദ്യം നിങ്ങളുടെ മുഖം രജിസ്റ്റർ ചെയ്യുക',
     Phrase.addSiteFirst: 'ആദ്യം ജോലിസ്ഥലം ചേർക്കുക',
     Phrase.lookAtCamera: 'ക്യാമറയിലേക്ക് നോക്കുക',
+    Phrase.useSamePhone: 'തുടങ്ങിയ ഫോണിൽ തന്നെ അവസാനിപ്പിക്കുക.',
   },
   'ta': {
     Phrase.startWork: 'வேலையைத் தொடங்க பச்சை பொத்தானை அழுத்தவும்',
@@ -133,6 +137,7 @@ const phrases = <String, Map<Phrase, String>>{
     Phrase.registerFaceFirst: 'முதலில் உங்கள் முகத்தைப் பதிவு செய்யவும்',
     Phrase.addSiteFirst: 'முதலில் வேலை இடத்தைச் சேர்க்கவும்',
     Phrase.lookAtCamera: 'கேமராவைப் பாருங்கள்',
+    Phrase.useSamePhone: 'தொடங்கிய தொலைபேசியிலேயே முடியுங்கள்.',
   },
   'ur': {
     Phrase.startWork: 'کام شروع کرنے کے لیے سبز بٹن دبائیں',
@@ -150,6 +155,7 @@ const phrases = <String, Map<Phrase, String>>{
     Phrase.registerFaceFirst: 'پہلے اپنا چہرہ رجسٹر کریں',
     Phrase.addSiteFirst: 'پہلے اپنی کام کی جگہ شامل کریں',
     Phrase.lookAtCamera: 'کیمرے کی طرف دیکھیں',
+    Phrase.useSamePhone: 'جس فون پر شروع کیا تھا، اسی پر ختم کریں۔',
   },
   'bn': {
     Phrase.startWork: 'কাজ শুরু করতে সবুজ বোতাম টিপুন',
@@ -167,6 +173,7 @@ const phrases = <String, Map<Phrase, String>>{
     Phrase.registerFaceFirst: 'প্রথমে আপনার মুখ নিবন্ধন করুন',
     Phrase.addSiteFirst: 'প্রথমে কাজের জায়গা যোগ করুন',
     Phrase.lookAtCamera: 'ক্যামেরার দিকে তাকান',
+    Phrase.useSamePhone: 'যে ফোনে শুরু করেছিলেন, সেই ফোনেই শেষ করুন।',
   },
 };
 

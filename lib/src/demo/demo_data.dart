@@ -18,6 +18,9 @@ const demoProjectId = 'demo-project';
 const demoEveningProjectId = 'demo-project-evening';
 const _demoPrefix = 'demo-';
 
+/// Whether [id] (a worker's, site's or project's) belongs to the demo.
+bool isDemoId(String id) => id.startsWith(_demoPrefix);
+
 bool hasDemoData(AttendanceStore store) =>
     store.projectById(demoProjectId) != null;
 
