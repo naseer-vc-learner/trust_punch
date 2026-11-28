@@ -1170,27 +1170,64 @@ git switch main && git pull --ff-only
 
 ### Day 4 — RBAC engine and the permission matrix as code
 
-**Build**
-- `rbac/permissions.py`: [5.3](#53-permission-matrix) as data (role → permission → scope).
-- `rbac/deps.py`: `require(code)` resolves the caller's grants, loads the object's scope, and returns **404** when out of scope.
-- `role_assignments` table; `GET /v1/me` returns roles, scopes and permission codes.
-- A startup check that every route declares a permission.
-- `tests/authz/test_matrix.py`: parametrised over every role × every route × an in-scope and an out-of-scope object. It grows each day as routes are added.
+**Built** (written and verified; you run the commands below):
+- **`app/rbac/`**: pure rules, no database and no HTTP.
+  - `permissions.py` holds the eight roles with ranks, where each can be assigned, and the [5.3](#53-permission-matrix) matrix as data.
+  - `policy.py` holds the decision: `allows(actor, permission, object)`, `reach()` for filtering lists, and `rank_over()` for "only ranks below your own".
+  - Cell meanings: `T` = whole tenant, `O` = own records, the role's home letter (R/S/M/F) = what the role is assigned to.
+- **`app/modules/roles/`**: the `role_assignments` table (migration `0004`), grant and revoke, and `require("permission")`.
+  - No permission at all: 403.
+  - Has the permission, but the object is out of scope (or another tenant's): **404**, the same as a missing object (OWASP API1).
+- **No escalation:**
+  - Grant or remove only roles ranked below your own highest role that reaches the target scope.
+  - Never your own roles.
+  - Each role only at its scope types (supervisor → team, site admin → site, …).
+  - The last Admin L1 can't be removed.
+- **Deny by default** (`app/core/access.py`):
+  - Every route declares `public`, `device`, `self` or `perm:<code>`, and the app refuses to start otherwise.
+  - **Finding fixed today:** FastAPI 0.165 keeps included routers as wrappers, so a naive check saw *zero* routes and "passed". The walk now follows the wrappers, and the app also refuses to start if it can't see any routes, so a future FastAPI change can't make the check pass silently.
+- **Endpoints:**
+  - `GET /v1/me` now includes roles and permission codes, for the app's UI.
+  - `GET /v1/roles` returns the role catalogue.
+  - `GET|POST /v1/users/{id}/roles` and `DELETE /v1/users/{id}/roles/{assignment}`.
+- **CLI:** `create-admin` now grants `admin_l1`; `grant-role` (operator, no rank rule) and `roles <username>`.
+- **Tests:** 1093 in total, including all 488 matrix cells checked against four objects each (inside scope, elsewhere, own record, other tenant), the role HTTP rules, and the route-access walk.
+- **Limits until Day 6/7:**
+  - Region, site and team ids are not checked against real org records yet.
+  - A region grant doesn't yet reach the sites inside it.
+  - People don't have sites or teams yet, so managers reach users only tenant-wide.
 
 **Commands**
 
 ```bash
-git switch main && git pull --ff-only && git switch -c day-04-rbac
-cd backend && .venv/bin/alembic revision --autogenerate -m "0004 role assignments" \
-  && .venv/bin/alembic upgrade head && .venv/bin/pytest -q tests/authz && cd ..
+cd ~/Developer/work/trust_punch/backend
+.venv/bin/ruff check --fix . && .venv/bin/ruff format .
+.venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/mypy
+.venv/bin/pytest -q                                            # 1093 passed
+cp data/trustpunch.db data/trustpunch.db.bak-day04 2>/dev/null || true
+.venv/bin/python -m app.cli migrate && .venv/bin/alembic current   # 0004 (head)
+.venv/bin/python -m app.cli grant-role admin admin_l1          # your Day-3 admin account
+.venv/bin/python -m app.cli roles admin
+.venv/bin/python scripts/export_openapi.py > ../docs/openapi.json
+cd ..
 ```
 
-**Conclusion:** access is denied by default, checked per object, and the matrix is executable and tested (OWASP API1/API5).
+**Conclusion:**
+- Every route says who may call it, or the server won't start.
+- The permission matrix is executable and proven cell by cell.
+- Objects outside your scope look exactly like missing ones.
+- Nobody can raise their own or anyone's privileges to their own level.
 
 ```bash
-git add backend/app/rbac backend/app/main.py backend/app/modules/users backend/migrations/versions backend/tests docs/openapi.json
-git commit -m "feat(rbac): eight roles with scopes, deny-by-default routes, executable permission matrix"
-git push -u origin day-04-rbac && gh pr create --fill --base main && gh pr checks --watch && gh pr merge --squash --delete-branch
+git add backend/app backend/migrations backend/tests backend/README.md docs/openapi.json docs/CONNECTED_PLATFORM_PLAN.md
+git status --short                                             # nothing from data/ or certs/
+gitleaks git --pre-commit --staged -v
+git commit -m "feat(rbac): eight roles with scopes, executable permission matrix, deny-by-default routes, no-escalation role grants"
+git push -u origin day-04-rbac
+gh pr create --fill --base main
+gh pr checks --watch
+gh pr merge --squash --delete-branch
+git switch main && git pull --ff-only
 ```
 
 ### Day 5 — MFA and audit log; week 1 review

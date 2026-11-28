@@ -2,9 +2,10 @@
 
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.core.access import public
 from app.core.schemas import Strict
 
 from . import service
@@ -29,7 +30,7 @@ class DeviceResponse(BaseModel):
     name: str
 
 
-@router.post("/devices/pair", response_model=PairResponse)
+@router.post("/devices/pair", response_model=PairResponse, dependencies=[Depends(public)])
 def pair(body: PairRequest, request: Request, db: Db) -> PairResponse:
     """Trades a one-time code from the server's operator for a device token."""
     client = request.client.host if request.client else "unknown"

@@ -6,6 +6,7 @@ from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
 
 import app.modules.auth.models
+import app.modules.roles.models
 import app.modules.tenancy.models
 import app.modules.users.models  # noqa: F401 - registers the tables
 from app.core.db import engine, metadata
