@@ -83,6 +83,8 @@ the phone cannot reach the Mac.
 .venv/bin/python -m app.cli create-admin --username admin --display-name "Site Admin"
 .venv/bin/python -m app.cli disable-user <username>   # cut someone off at once
 .venv/bin/python -m app.cli enable-user <username>
+.venv/bin/python -m app.cli grant-role <username> <role> [--scope-type site --scope-id <id>]
+.venv/bin/python -m app.cli roles <username>
 ```
 
 The report lists each punch with the server's findings. Every command (and
@@ -109,8 +111,32 @@ Send the access token as `Authorization: Bearer tp_at_…`. Device tokens
   locked accounts all answer the same way, at the same speed.
 - A refresh token used twice means a copy exists: every session in its
   family is ended.
-- Only SHA-256 hashes of tokens are stored. Roles and permissions arrive on
-  Day 4; until then a signed-in user can only see and manage themselves.
+- Only SHA-256 hashes of tokens are stored.
+
+## Roles and permissions
+
+Eight roles, highest first: `admin_l1` (whole company), `admin_l2`
+(regions), `admin_l3` (sites), `manager_l1` (regions), `manager_l2` (sites),
+`manager_l3` (teams), `supervisor` (a team's crew), `staff` (own records).
+The full matrix is `app/rbac/permissions.py`; `GET /v1/roles` returns it.
+
+```bash
+.venv/bin/python -m app.cli grant-role <username> admin_l1
+.venv/bin/python -m app.cli grant-role <username> manager_l2 --scope-type site --scope-id <site-id>
+.venv/bin/python -m app.cli roles <username>
+```
+
+- **Deny by default.** Every route declares who may call it (`public`,
+  `device`, `self` or a permission); the server refuses to start otherwise.
+- **Out of scope looks missing.** Without the permission at all: 403. With
+  it, but for an object in another site, team or company: 404, the same as
+  an object that doesn't exist.
+- **No escalation.** Through the API you can grant or remove only roles
+  ranked below your own (within the scope you manage), never your own, and
+  the last `admin_l1` can't be removed. The CLI operator is trusted and
+  skips the rank rule.
+- `GET /v1/me` lists your roles and permission codes, so the app can hide
+  what you can't use. The server still checks every request.
 
 ## How the code is laid out
 

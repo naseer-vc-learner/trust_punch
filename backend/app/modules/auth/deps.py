@@ -4,6 +4,7 @@ from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException
 
+from app.core.access import mark
 from app.core.db import Conn
 
 from . import service
@@ -18,5 +19,8 @@ def current_user(conn: Conn, authorization: Annotated[str | None, Header()] = No
             401, "Sign in required", headers={"WWW-Authenticate": "Bearer"}
         ) from None
 
+
+# Any signed-in user, for their own records (see app/core/access.py).
+mark(current_user, "self")
 
 CurrentUser = Annotated[Principal, Depends(current_user)]

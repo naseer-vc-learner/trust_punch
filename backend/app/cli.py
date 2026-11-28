@@ -9,11 +9,13 @@
     .venv/bin/python -m app.cli create-admin --username <name> [--display-name "<name>"]
     .venv/bin/python -m app.cli disable-user <username>   # signs them out everywhere
     .venv/bin/python -m app.cli enable-user <username>
+    .venv/bin/python -m app.cli grant-role <username> <role> [--scope-type site --scope-id <id>]
+    .venv/bin/python -m app.cli roles <username>          # what someone holds
 
 Every command first brings the database up to date. Passwords are always
 asked for interactively, never taken as arguments (they would end up in the
-shell history). Reading attendance needs a supervisor login (plan, Day 4);
-until then it is CLI-only.
+shell history). The operator on the server machine is trusted: grant-role
+skips the "only ranks below your own" rule that applies through the API.
 """
 
 import argparse
@@ -25,7 +27,9 @@ from app.core.config import DEFAULT_TENANT_ID
 from app.core.db import connect, engine, migrate
 from app.modules.attendance import service as attendance
 from app.modules.devices import service as devices
+from app.modules.roles import service as roles
 from app.modules.users import service as users
+from app.rbac.permissions import ROLES
 
 
 def _create_admin(username: str, display_name: str | None) -> int:
@@ -45,8 +49,37 @@ def _create_admin(username: str, display_name: str | None) -> int:
             print(f"Username not accepted: {e}", file=sys.stderr)
             return 1
         conn.commit()
-    print(f"Created user {users.normalise_username(username)} ({user_id}).")
-    print("Roles arrive on Day 4; until then this account can sign in but not administer.")
+        roles.grant(conn, None, DEFAULT_TENANT_ID, user_id, "admin_l1", "tenant", None)
+    print(f"Created user {users.normalise_username(username)} ({user_id}) as admin_l1.")
+    return 0
+
+
+def _grant_role(username: str, role: str, scope_type: str, scope_id: str | None) -> int:
+    with engine().connect() as conn:
+        user = users.find(conn, DEFAULT_TENANT_ID, username)
+        if user is None:
+            print("No such user", file=sys.stderr)
+            return 1
+        try:
+            roles.grant(conn, None, DEFAULT_TENANT_ID, user["id"], role, scope_type, scope_id)
+        except roles.InvalidGrant as e:
+            print(f"Not granted: {e}", file=sys.stderr)
+            return 1
+    print(f"{user['username']} now holds {role} ({scope_type}{' ' + scope_id if scope_id else ''})")
+    return 0
+
+
+def _show_roles(username: str) -> int:
+    with engine().connect() as conn:
+        user = users.find(conn, DEFAULT_TENANT_ID, username)
+        if user is None:
+            print("No such user", file=sys.stderr)
+            return 1
+        rows = roles.assignments(conn, user["id"])
+    if not rows:
+        print(f"{user['username']} holds no roles.")
+    for r in rows:
+        print(f"{r['id']}  {r['role']:<11} {r['scope_type']:<7} {r['scope_id']}")
     return 0
 
 
@@ -75,8 +108,15 @@ def main(argv: list[str] | None = None) -> int:
     admin = sub.add_parser("create-admin")
     admin.add_argument("--username", required=True)
     admin.add_argument("--display-name")
-    for name in ("disable-user", "enable-user"):
+    for name in ("disable-user", "enable-user", "roles"):
         sub.add_parser(name).add_argument("username")
+    grant_p = sub.add_parser("grant-role")
+    grant_p.add_argument("username")
+    grant_p.add_argument("role", choices=ROLES)
+    grant_p.add_argument(
+        "--scope-type", default="tenant", choices=("tenant", "region", "site", "team")
+    )
+    grant_p.add_argument("--scope-id")
     args = parser.parse_args(argv)
 
     migrate()
@@ -87,6 +127,10 @@ def main(argv: list[str] | None = None) -> int:
         return _create_admin(args.username, args.display_name)
     if args.command in ("disable-user", "enable-user"):
         return _set_disabled(args.username, args.command == "disable-user")
+    if args.command == "grant-role":
+        return _grant_role(args.username, args.role, args.scope_type, args.scope_id)
+    if args.command == "roles":
+        return _show_roles(args.username)
 
     conn = connect()
     try:

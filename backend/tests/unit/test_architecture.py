@@ -1,6 +1,7 @@
 """The layer rules, checked on every import in app/ (see app/modules/__init__.py).
 
-1. app.core imports nothing from app.modules or app.main.
+1. app.core and app.rbac import nothing from app.modules or app.main
+   (app.rbac is pure rules; it may use app.core).
 2. A module reaches another module only through its service.py or deps.py.
 3. Inside a module: repo.py imports no router/service/deps; service.py no router.
 4. Nothing imports app.main or app.cli (they are entry points).
@@ -50,6 +51,8 @@ def _violations() -> list[str]:
                 found.append(f"{me} imports entry point {target}")
             if parts[:2] == ["app", "core"] and t[:2] in (["app", "modules"], ["app", "main"]):
                 found.append(f"{me}: core must not import {target}")
+            if parts[:2] == ["app", "rbac"] and t[:2] in (["app", "modules"], ["app", "main"]):
+                found.append(f"{me}: rbac must not import {target}")
             if parts[:2] == ["app", "modules"] and len(parts) >= 4 and t[:2] == ["app", "modules"]:
                 if len(t) < 3:
                     continue

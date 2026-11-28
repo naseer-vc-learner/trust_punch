@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.core import errors, http
+from app.core.access import verify_routes
 from app.core.config import VERSION, get_settings
 from app.core.db import dispose_engines, migrate
 from app.core.logging import configure_logging
@@ -24,6 +25,7 @@ from app.modules.attendance.router import router as attendance_router
 from app.modules.auth.router import router as auth_router
 from app.modules.devices.router import router as devices_router
 from app.modules.health.router import router as health_router
+from app.modules.roles.router import router as roles_router
 
 V1 = "/v1"
 # Served at both the old path and /v1 until the app moves (plan, Day 11).
@@ -55,9 +57,12 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(auth_router, prefix=V1)
+    app.include_router(roles_router, prefix=V1)
     for router in _LEGACY_ROUTERS:
         app.include_router(router, prefix=V1)
         app.include_router(router, include_in_schema=False)
+    # Deny by default: refuse to start if any route doesn't say who may call it.
+    verify_routes(app)
     return app
 
 

@@ -7,10 +7,11 @@ GET /v1/meta/version     server version, oldest app version still accepted
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from app.core.access import public
 from app.core.config import SERVICE, VERSION, get_settings
 from app.core.db import connect, schema_status
 
@@ -37,7 +38,7 @@ class Meta(BaseModel):
     minAppVersion: str
 
 
-@router.get("/health", response_model=Health)
+@router.get("/health", response_model=Health, dependencies=[Depends(public)])
 def health() -> Health:
     """Says the server is up, and what time it thinks it is.
 
@@ -52,7 +53,12 @@ def health() -> Health:
     )
 
 
-@router.get("/v1/health/ready", response_model=Ready, responses={503: {"model": Ready}})
+@router.get(
+    "/v1/health/ready",
+    response_model=Ready,
+    responses={503: {"model": Ready}},
+    dependencies=[Depends(public)],
+)
 def ready() -> JSONResponse:
     """200 only when the database answers and is at the newest migration."""
     try:
@@ -70,7 +76,7 @@ def ready() -> JSONResponse:
     return JSONResponse(body.model_dump(), status_code=200 if ok else 503)
 
 
-@router.get("/v1/meta/version", response_model=Meta)
+@router.get("/v1/meta/version", response_model=Meta, dependencies=[Depends(public)])
 def meta() -> Meta:
     return Meta(
         service=SERVICE,

@@ -5,6 +5,7 @@ from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException
 
+from app.core.access import mark
 from app.core.db import get_db
 
 from . import service
@@ -21,5 +22,8 @@ def current_device(db: Db, authorization: Annotated[str | None, Header()] = None
     except service.Blocked:
         raise HTTPException(403, "This phone is blocked") from None
 
+
+# A paired, unblocked device (see app/core/access.py).
+mark(current_device, "device")
 
 Device = Annotated[sqlite3.Row, Depends(current_device)]
