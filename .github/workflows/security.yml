@@ -1,0 +1,212 @@
+# Security checks. Fast ones run on every pull request; the slow dynamic ones
+# (API fuzzing, ZAP, MobSF on the APK) run nightly and on demand.
+# Findings land in the repository's Security tab (SARIF) or as artifacts.
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "30 1 * * *" # 01:30 UTC nightly
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: "3.44.2"
+  PYTHON_VERSION: "3.14"
+
+jobs:
+  secrets:
+    name: Secret scan (gitleaks, full history)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dependencies:
+    name: Vulnerable dependencies (OSV)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: google/osv-scanner-action/osv-scanner-action@32d3cd482bdadfb38b186c0ad1b031902d55d932 # v2.7.1
+        with:
+          scan-args: |-
+            --lockfile=pubspec.lock
+            --lockfile=backend/requirements.txt
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, actions]
+    steps:
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended
+      - uses: github/codeql-action/analyze@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          category: /language:${{ matrix.language }}
+
+  mobile-sast:
+    name: Mobile source scan (mobsfscan, MASVS rules)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      # Covers the native layers (AndroidManifest, Kotlin, Swift, plists).
+      # Dart itself is covered by `dart analyze` and the manual MASTG pass.
+      - run: |
+          pip install mobsfscan==1.2.0
+          mobsfscan --sarif -o mobsfscan.sarif --no-fail android/app/src ios/Runner
+      - uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          sarif_file: mobsfscan.sarif
+          category: mobsfscan
+
+  api-dast:
+    name: API fuzzing (Schemathesis) + DAST (ZAP)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Start the server with its OpenAPI schema exposed (CI only)
+        working-directory: backend
+        env:
+          TRUSTPUNCH_DB: ${{ runner.temp }}/tp-dast.db
+          TRUSTPUNCH_DEBUG: "1"
+        run: |
+          pip install -r requirements.txt
+          nohup uvicorn app.main:app --host 127.0.0.1 --port 8765 > "$RUNNER_TEMP/server.log" 2>&1 &
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8765/health && break; sleep 1; done
+          CODE=$(python -m app.cli pair-code | grep -o '[0-9]\{6\}' | head -1)
+          TOKEN=$(curl -fsS -X POST http://127.0.0.1:8765/devices/pair \
+            -H 'Content-Type: application/json' \
+            -d "{\"code\":\"$CODE\",\"deviceName\":\"ci-fuzzer\",\"platform\":\"other\"}" \
+            | python -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+          echo "::add-mask::$TOKEN"
+          echo "API_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+      - name: Schemathesis (property-based fuzzing of every endpoint)
+        run: |
+          pip install schemathesis==4.34.4
+          schemathesis run http://127.0.0.1:8765/openapi.json \
+            --checks all \
+            --header "Authorization: Bearer $API_TOKEN" \
+            --report junit --report-dir "$RUNNER_TEMP/schemathesis"
+      - name: OWASP ZAP API scan
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/zap" && chmod 777 "$RUNNER_TEMP/zap"
+          # ZAP adds this header to every request (ZAP_AUTH_HEADER* variables).
+          docker run --rm --network host -v "$RUNNER_TEMP/zap:/zap/wrk:rw" \
+            -e ZAP_AUTH_HEADER=Authorization \
+            -e ZAP_AUTH_HEADER_VALUE="Bearer $API_TOKEN" \
+            ghcr.io/zaproxy/zaproxy:stable zap-api-scan.py \
+            -t http://127.0.0.1:8765/openapi.json -f openapi \
+            -r zap-report.html -J zap-report.json -I
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: api-dast-reports
+          path: |
+            ${{ runner.temp }}/schemathesis
+            ${{ runner.temp }}/zap
+            ${{ runner.temp }}/server.log
+          retention-days: 14
+
+  mobsf-apk:
+    name: MobSF static scan of the connected APK
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: >
+          flutter build apk --release --flavor connected -t lib/main_connected.dart
+          --obfuscate --split-debug-info=build/symbols/connected
+          --dart-define=API_BASE_URL=https://trustpunch.invalid:8443
+      - name: Scan with MobSF
+        run: |
+          KEY=$(openssl rand -hex 32); echo "::add-mask::$KEY"
+          docker run -d --name mobsf -p 8000:8000 -e MOBSF_API_KEY="$KEY" \
+            opensecurity/mobile-security-framework-mobsf:latest
+          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8000/ >/dev/null 2>&1 && break; sleep 5; done
+          APK=$(ls build/app/outputs/flutter-apk/app-connected-release.apk)
+          HASH=$(curl -fsS -H "Authorization: $KEY" -F "file=@$APK" http://127.0.0.1:8000/api/v1/upload \
+            | python3 -c 'import sys,json;print(json.load(sys.stdin)["hash"])')
+          curl -fsS -H "Authorization: $KEY" -d "hash=$HASH" http://127.0.0.1:8000/api/v1/scan > /dev/null
+          curl -fsS -H "Authorization: $KEY" -d "hash=$HASH" http://127.0.0.1:8000/api/v1/report_json > mobsf-report.json
+          curl -fsS -H "Authorization: $KEY" -d "hash=$HASH" http://127.0.0.1:8000/api/v1/download_pdf > mobsf-report.pdf || true
+          python3 -c 'import json;r=json.load(open("mobsf-report.json"));print("MobSF security score:",r.get("appsec",{}).get("security_score"))'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: mobsf-report
+          path: mobsf-report.*
+          retention-days: 30

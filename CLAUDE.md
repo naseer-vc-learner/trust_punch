@@ -1,9 +1,17 @@
 # TrustPunch
 
-Attendance module of an HRMS, built as a **demonstration**. Fully offline: no
-backend, no network, no accounts. Everything lives on the device: records in
-SQLite (`attendance.db` in the app support folder), small settings in
-`shared_preferences`.
+Attendance module of an HRMS, built as a **demonstration**. Two apps from one
+codebase (Flutter flavors), installable side by side:
+
+- **Trust Punch** (`demo` flavor, `lib/main.dart`): the offline demo. No
+  backend, no network (except the supervisor's map), no accounts. Must always
+  be demo-ready; it never imports anything under `lib/src/connected/`.
+- **TrustPunch Connected** (`connected` flavor, `lib/main_connected.dart`):
+  the same app plus uploading punches to the local FastAPI server in
+  `backend/` (see `backend/README.md`). Own bundle id and data.
+
+Everything lives on the device: records in SQLite (`attendance.db` in the app
+support folder), small settings in `shared_preferences`.
 
 Target device is a physical iPhone — the iOS simulator has no camera, so
 enrollment and check-in cannot run there.
@@ -11,10 +19,22 @@ enrollment and check-in cannot run there.
 ## Run it
 
 ```bash
-flutter run -d 00008101-00042D461105001E --debug     # the connected iPhone
+flutter run -d 00008101-00042D461105001E --debug     # demo app on the iPhone
 flutter devices                                      # if the id changed
 dart analyze lib                                     # must stay clean
+flutter test                                         # app tests
+(cd backend && .venv/bin/pytest -q)                  # server tests
+
+# Connected app (server running: backend/scripts/run-dev.sh)
+flutter run -d 00008101-00042D461105001E --flavor connected \
+  -t lib/main_connected.dart \
+  --dart-define=API_BASE_URL=https://$(ipconfig getifaddr en0):8443 \
+  --dart-define=API_DEV_CA=$(base64 -i backend/certs/dev-ca.pem)
 ```
+
+Plain `flutter run`/`build` is the demo (`default-flavor: demo` in
+pubspec). `main_connected.dart` refuses to start in the demo flavor, so the
+demo's data can never be uploaded.
 
 **Only ever have one `flutter run` alive.** Two sessions fight over the device
 and the second hangs on "Installing and launching…" forever with no error.
@@ -35,7 +55,11 @@ lib/
     models/project.dart          Project (jobs = activities, roles); Site carries projectId + shift
     models/requests.dart         OvertimeDecision, CorrectionRequest (pending/approved/rejected)
     store/attendance_store.dart  all state, in-memory punch index, hours/break/flag maths
-    store/attendance_database.dart  SQLite: one row per punch / record, WAL
+    store/attendance_database.dart  SQLite: one row per punch / record, WAL;
+                                 punch ids + upload outbox (schema 2)
+    connected/                   connected app only: server_api (HTTPS, dev CA
+                                 pin), punch_sync (outbox upload), device_token
+                                 (Keychain), server_panel (picker line, pairing)
     i18n/phrases.dart            spoken lines + language list
     i18n/ui_text.dart            on-screen text (enum T), isRtl()
     services/
@@ -87,6 +111,34 @@ choice (finish vs break). `runPunch()` plans again at save time and writes the
 automatic check-out and the punch together (`recordPunch`).
 
 ## Decisions worth not re-litigating
+
+- **Demo and connected are separate apps** (flavors `demo` / `connected`).
+  iOS: build configurations `Debug|Release|Profile-demo|connected` with
+  their own `Flutter/*.xcconfig`, schemes `demo` and `connected`, bundle id
+  `com.example.trustPunch[.connected]`, name from `APP_DISPLAY_NAME`.
+  Android: `productFlavors`, `applicationIdSuffix ".connected"`, label from
+  `resValue app_name` (`buildFeatures.resValues = true`, needed on AGP 9).
+  Podfile maps every configuration. The demo app keeps its old id, so its
+  data on the phone is untouched.
+- **One session, one way.** A worker checked in on the gate phone finishes
+  on the gate phone (break, check-out, moving location), and the same for
+  their own phone; after their check-out either way is fine again. Each live
+  punch records `via` (ownPhone/gate, schema 3); `viaAllowed` decides, and
+  `recordPunch` refuses too, so no screen can slip past. Automatic and
+  corrected punches carry no `via` and never lock; a session left open on an
+  earlier day doesn't either. Across phones (connected app): before a punch
+  the phone asks `GET /workers/{id}/open-session` (3 s) through
+  `PunchGuards.checkedInElsewhere`; offline or unpaired it can't tell and
+  lets the punch through, and the server flags `other_phone` on upload. A
+  checkout not yet uploaded from phone A can still block phone B briefly.
+- **Server sync is offline-first** (connected app only): every saved punch
+  has a permanent id (`newPunchId`, UUID v4) and sits in the outbox
+  (`punches.synced`) until the server has it; resends are harmless. Pairing
+  is a one-time 6-digit code printed by the server; the token goes to the
+  Keychain/Keystore. Demo-data punches are marked "kept on phone", never
+  sent. A correction carries `replaces` (the replaced punch's id). The
+  server re-checks and flags (clock skew, future time, distance, moved site,
+  out of order across phones) but never refuses an honest punch.
 
 - **No Firebase.** It was removed deliberately; App Check could not work
   against a placeholder project and its failures were corrupting auth headers.
@@ -275,6 +327,10 @@ automatic check-out and the punch together (`recordPunch`).
   shows a banner; nothing else depends on it.
 
 ## Possible next steps
+
+Server, next steps: supervisor login (then a web view instead of the CLI
+report), server-owned projects/locations/workers downloaded by phones,
+several gate phones sharing one roster, PostgreSQL.
 
 Discussed but not built: CSV/Excel payroll export (with payable hours),
 photo-based site and worker identity, iOS backup exclusion for selfies and
